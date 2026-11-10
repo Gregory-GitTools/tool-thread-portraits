@@ -97,7 +97,7 @@
   <label title="Предел. Расчёт останавливается раньше, если новые нити уже не улучшают рисунок — сколько их понадобилось, видно ниже">Линий (максимум) <input type="range" id="lines" min="500" max="30000" step="100" value="7000"></label>
   <div id="linesNote"></div>
   <label title="Нить может плавно менять оттенок к середине (как секционно окрашенная пряжа) — так точнее ложатся цветные акценты: губы, глаза, яркие пятна. 0 — каждая нить одного цвета">Точность цветного акцента <input type="range" id="tint" min="0" max="100" value="60"></label>
-  <label title="Толщина и плотность одной нити. 20–40 — каждая нить видна чётко, картина «нитяная»; меньше 15 — нити сливаются в мягкий полутон, ближе к фото">Толщина нити <input type="range" id="alpha" min="4" max="40" value="25"></label>
+  <label title="Толщина и плотность одной нити. 15 — нити видны по отдельности, а лицо чистое. 25–40 — нити толще и заметнее, но тонкие тени на лице грубеют; меньше 12 — нити сливаются в мягкий полутон">Толщина нити <input type="range" id="alpha" min="4" max="40" value="15"></label>
   <label title="Как выглядит нить на картине. Меняется сразу, без нового расчёта">Текстура нити <select id="texture">
     <option value="plain">Обычная</option>
     <option value="silk">Шёлк — гладкая, с блеском</option>
@@ -388,7 +388,7 @@ function autoSettings() {
   bl.sort((a, b) => a - b);
   const darkBg = bl[Math.floor(bl.length / 2)] < 0.4, colorful = satS / Math.max(1, lums.length) > 0.06;
   setVal('threads', colorful ? (darkBg ? 'color-dark' : 'color-light') : (darkBg ? 'mono-light' : 'mono-dark'));
-  setVal('nails', 400); setVal('lines', 30000); setVal('alpha', 25);
+  setVal('nails', 400); setVal('lines', 30000); setVal('alpha', 15);
   setVal('tint', colorful ? 60 : 0); setVal('res', 520); setVal('chaos', 40); setVal('center', face ? 75 : 30);
   readS(); layout();
   invalidate(`Авто: ${face ? 'лицо найдено, кадр приближен' : 'лица не нашёл — взят весь кадр'}; нити — ${$('threads').selectedOptions[0].text.toLowerCase()}. Нажмите «▶ Старт»`);
