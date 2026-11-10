@@ -1,0 +1,1113 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Нитяные портреты — гвозди, нить и порядок заполнения</title>
+<style>
+  html,body{margin:0;height:100%;background:#0b0b0e;overflow:hidden;font:13px system-ui,"Segoe UI",sans-serif;color:#ddd}
+  #c{position:absolute;transform-origin:0 0;touch-action:none}
+  #c.zoomed{cursor:grab}
+  #c.drag{cursor:grabbing}
+  h1{display:flex;align-items:center;gap:4px}
+  h1 span{flex:1}
+  .win{padding:1px 6px;margin:0;font-size:13px;line-height:18px}
+  #showPanel{position:fixed;top:12px;left:12px;z-index:3;display:none;padding:4px 10px}
+  body.nopanel #showPanel{display:block}
+  #panel{position:fixed;top:12px;left:12px;width:300px;background:rgba(16,16,24,.86);backdrop-filter:blur(6px);
+    border:1px solid #333;border-radius:10px;padding:10px 12px;max-height:calc(100vh - 48px);overflow:auto;z-index:2}
+  #panel.hidden{display:none}
+  h1{font-size:14px;margin:0 0 6px;font-weight:600}
+  h2{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#889;margin:10px 0 2px;font-weight:600}
+  label{display:flex;justify-content:space-between;align-items:center;margin:5px 0;gap:8px}
+  input[type=range]{width:105px}
+  .num{width:44px;-moz-appearance:textfield;appearance:textfield;background:#1b1b26;color:#eee;border:1px solid #444;border-radius:5px;padding:2px 4px;font:inherit;text-align:right}
+  .num::-webkit-inner-spin-button,.num::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
+  .rng{display:flex;align-items:center;gap:6px}
+  #panel select{max-width:175px}
+  select,button{background:#262634;color:#eee;border:1px solid #444;border-radius:6px;padding:4px 7px;font:inherit}
+  button{cursor:pointer;margin:3px 2px 0 0}
+  button:hover{border-color:#888}
+  button:disabled{opacity:.4;cursor:default}
+  button.rec{background:#6e1d28}
+  button.rec.on{background:#d22;animation:blink 1s infinite}
+  @keyframes blink{50%{opacity:.6}}
+  #preview{width:110px;height:110px;border-radius:6px;border:1px solid #444;display:block;margin:6px auto 0;image-rendering:auto}
+  .hint{color:#778;font-size:11px;margin-top:8px;line-height:1.4}
+  #crop{position:fixed;inset:0;background:rgba(5,5,8,.94);z-index:5;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px}
+  #crop[hidden]{display:none}
+  #cropCv{cursor:grab;touch-action:none;border-radius:6px}
+  #cropCv.drag{cursor:grabbing}
+  #crop .bar{display:flex;gap:10px;align-items:center}
+  #crop .bar input[type=range]{width:220px}
+  #linesNote{color:#ffd88a;font-size:11px;margin:-3px 0 4px;text-align:right}
+  #gallery{display:flex;flex-wrap:wrap;gap:5px;margin:6px 0}
+  .tile{width:52px;height:52px;border-radius:6px;background:#222 center/cover;border:1px solid #444;cursor:pointer;position:relative}
+  .tile:hover{border-color:#aaa}
+  .tile.on{border:2px solid #ffd88a}
+  .tile .x{position:absolute;top:-6px;right:-6px;width:17px;height:17px;border-radius:50%;background:#444;color:#fff;font-size:12px;line-height:16px;text-align:center;display:none}
+  .tile:hover .x{display:block}
+  .row{display:flex;gap:4px;align-items:center}
+  #panel .row select{flex:1;max-width:none}
+  #status{color:#9cf;font-size:12px;min-height:16px;margin-top:6px}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="panel">
+  <h1><span>Нитяные портреты</span>
+    <button class="win" id="btnFull" title="На весь монитор (ещё раз или Esc — обратно)">⛶</button>
+    <button class="win" id="btnBig" title="Во всё окно: панель прячется, картина — на всё окно">⤢</button>
+    <button class="win" id="btnHide" title="Скрыть панель (клавиша H)">✕</button>
+  </h1>
+  <div><button id="btnPhoto">Фото…</button><button id="btnSavePhoto" title="Запомнить это фото вместе с кадрированием — оно появится в примерах ниже">☆ Сохранить в примеры</button></div>
+  <input type="file" id="file" accept="image/*" hidden>
+  <h2>Примеры фото</h2>
+  <div id="gallery"></div>
+
+  <h2>Мои настройки</h2>
+  <div class="row">
+    <select id="presetSel" title="Сохранённые наборы настроек — выберите, чтобы применить"></select>
+    <button id="btnPresetSave" title="Запомнить все текущие настройки под своим названием">Сохранить…</button>
+    <button id="btnPresetDel" title="Удалить выбранный набор">✕</button>
+  </div>
+
+  <h2>Кадрирование фото</h2>
+  <button id="btnCrop">✂ Кадрировать…</button>
+  <button id="btnAuto" title="Программа сама найдёт лицо, приблизит кадр и подберёт нити, контраст и порядок заполнения под это фото">✨ Авто-настройка</button>
+  <input type="range" id="zoom" min="100" max="800" value="100" hidden>
+  <input type="range" id="ox" min="-100" max="100" value="0" hidden>
+  <input type="range" id="oy" min="-100" max="100" value="0" hidden>
+  <input type="range" id="contrast" min="0" max="100" value="0" hidden>
+  <input type="range" id="detail" min="0" max="100" value="70" hidden>
+  <canvas id="preview" width="110" height="110" title="Так программа «видит» фото. Щёлкните, чтобы кадрировать" style="cursor:pointer"></canvas>
+
+  <h2>Нити и гвозди</h2>
+  <label>Нити <select id="threads">
+    <option value="mono-light">Белым по чёрному</option>
+    <option value="mono-dark">Чёрным по белому</option>
+    <option value="color-light">Цветным по белому</option>
+    <option value="color-dark">Цветным по чёрному</option>
+  </select></label>
+  <label>Рамка <select id="shape">
+    <option value="circle">Круг (пяльцы)</option>
+    <option value="square">Квадрат</option>
+  </select></label>
+  <label>Гвоздей <input type="range" id="nails" min="100" max="400" value="330"></label>
+  <label title="Предел. Расчёт останавливается раньше, если новые нити уже не улучшают рисунок — сколько их понадобилось, видно ниже">Линий (максимум) <input type="range" id="lines" min="500" max="30000" step="100" value="7000"></label>
+  <div id="linesNote"></div>
+  <label title="Нить может плавно менять оттенок к середине (как секционно окрашенная пряжа) — так точнее ложатся цветные акценты: губы, глаза, яркие пятна. 0 — каждая нить одного цвета">Точность цветного акцента <input type="range" id="tint" min="0" max="100" value="60"></label>
+  <label title="Толщина и плотность одной нити. 20–40 — каждая нить видна чётко, картина «нитяная»; меньше 15 — нити сливаются в мягкий полутон, ближе к фото">Толщина нити <input type="range" id="alpha" min="4" max="40" value="25"></label>
+  <label title="Как выглядит нить на картине. Меняется сразу, без нового расчёта">Текстура нити <select id="texture">
+    <option value="plain">Обычная</option>
+    <option value="silk">Шёлк — гладкая, с блеском</option>
+    <option value="wool">Шерсть — неровная, скрученная</option>
+  </select></label>
+  <label>Детализация <select id="res">
+    <option value="400" selected>Хорошо (≈1 мин)</option>
+    <option value="520">Лучше (≈2 мин)</option>
+  </select></label>
+
+  <h2>Порядок заполнения</h2>
+  <label>Сначала хаос <input type="range" id="chaos" min="0" max="100" value="60"></label>
+  <label title="Только порядок, в котором нити натягиваются в клипе: сначала черты лица, потом крупные формы, края — в конце. На готовую картину не влияет, нового расчёта не нужно. 0 — в порядке расчёта">От лица к краям <input type="range" id="center" min="0" max="100" value="70"></label>
+
+  <h2>Клип</h2>
+  <label title="Размер и форма видео, которое сохраняет «● Запись»">Формат клипа <select id="frame">
+    <option value="window">Только пяльцы</option>
+    <option value="9x16">Вертикальный — Shorts, Reels</option>
+    <option value="1x1">Квадрат — Instagram</option>
+    <option value="16x9">Горизонтальный — YouTube</option>
+  </select></label>
+  <label>Длительность, с <input type="range" id="dur" min="10" max="180" value="40"></label>
+  <label>Медленное начало <input type="range" id="ease" min="10" max="40" value="25"></label>
+  <div>
+    <button id="btnStart">▶ Старт</button>
+    <button id="btnAgain">⟲ Заново</button>
+    <button id="btnRec" class="rec">● Запись</button>
+  </div>
+  <div>
+    <button id="btnPng">PNG</button>
+    <button id="btnScheme">Схема (порядок гвоздей)</button>
+  </div>
+  <div id="status"></div>
+  <div class="hint">
+    Программа натягивает нить от гвоздя к гвоздю и каждый раз выбирает линию, которая сильнее всего приближает рисунок к фото.
+    «Сначала хаос» — первые линии считаются по размытому фото: паутина заполняет крупные пятна, потом проступают формы и детали.
+    Клавиша H — скрыть панель. Фото можно перетащить в окно.
+  </div>
+</div>
+
+<button id="showPanel" title="Показать панель (клавиша H)">☰ Панель</button>
+
+<div id="crop" hidden>
+  <div style="color:#aab">Перетащите круг мышью, колёсико — уменьшить / увеличить круг. В круг должно попасть лицо.</div>
+  <canvas id="cropCv"></canvas>
+  <div class="bar">
+    Масштаб <input type="range" id="cropZoom" min="100" max="800" value="100">
+    <button id="cropReset">Сброс</button>
+    <button id="cropCancel">Отмена</button>
+    <button id="cropOk" style="background:#1d5e34">Готово</button>
+  </div>
+</div>
+
+<script src="vermeer.js"></script>
+<script src="demo.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const cv = $('c'), ctx = cv.getContext('2d');
+const base = document.createElement('canvas'), bctx = base.getContext('2d');    // натянутые нити
+const decor = document.createElement('canvas'), dctx = decor.getContext('2d');  // обруч и гвозди поверх
+const status = t => { $('status').textContent = t; };
+
+const S = {};
+const IDS = ['zoom', 'ox', 'oy', 'contrast', 'detail', 'threads', 'shape', 'nails', 'lines', 'alpha', 'res', 'chaos', 'center', 'tint', 'texture', 'frame', 'dur', 'ease'];
+function readS() {
+  for (const id of IDS) { const el = $(id); S[id] = el.type === 'range' || id === 'res' ? +el.value : el.value; }
+}
+
+// ---------- параметры из адреса (для тестов): #test=1&hide=1&img=x.jpg&nails=200&u=0.3 ----------
+const hp = new URLSearchParams(location.hash.slice(1));
+for (const id of IDS) if (hp.has(id)) $(id).value = hp.get(id);
+const TEST = hp.has('test');
+if (hp.has('hide')) { $('panel').classList.add('hidden'); document.body.classList.add('nopanel'); }
+readS();
+
+// ---------- источник: фото или демо ----------
+let src = null;
+// примеры: Вермеер (vermeer.js, общественное достояние) и, если есть, своё тренировочное фото (demo.js — только локально)
+const EXAMPLES = [];
+if (typeof DEMO_JPG !== 'undefined') EXAMPLES.push({ key: 'demo', name: 'Тренировочное фото', img: DEMO_JPG });
+if (typeof VERMEER_JPG !== 'undefined') EXAMPLES.push({ key: 'vermeer', name: 'Вермеер — Девушка с жемчужной серёжкой', img: VERMEER_JPG, threads: 'color-dark' });
+function loadDemo(cb) {
+  const ex = EXAMPLES[0];
+  if (!ex) { status('Нажмите «Фото…» и выберите снимок'); return; }
+  if (ex.threads) $('threads').value = ex.threads;
+  const im = new Image(); im.onload = () => cb(im, ex); im.src = ex.img;
+}
+let srcName = '', srcKey = null;
+function useImage(img, name, ask, crop, key) {
+  src = img; srcName = name; srcKey = key || null;
+  $('zoom').value = crop ? crop.zoom : 100; $('ox').value = crop ? crop.ox : 0; $('oy').value = crop ? crop.oy : 0;
+  invalidate(name + ' — нажмите «▶ Старт»');
+  drawGallery();
+  if (ask) openCrop();
+}
+
+// ---------- кадрирование: какой квадрат фото попадёт в рамку ----------
+// zoom — во сколько раз квадрат меньше короткой стороны фото (100 = вся), ox/oy — центр квадрата (−100…100 от края до края)
+function cropOf(zoom, ox, oy) {
+  const w = src.width, h = src.height, side = Math.min(w, h) / (zoom / 100);
+  const cx = Math.min(w - side / 2, Math.max(side / 2, w / 2 * (1 + ox / 100)));
+  const cy = Math.min(h - side / 2, Math.max(side / 2, h / 2 * (1 + oy / 100)));
+  return { side, cx, cy };
+}
+let cropSt = null, cropK = 1, cropDrag = null;
+function openCrop() {
+  if (!src) return;
+  cropSt = { zoom: +$('zoom').value, ox: +$('ox').value, oy: +$('oy').value };
+  const c = $('cropCv'), maxW = innerWidth * 0.9, maxH = innerHeight * 0.78;
+  cropK = Math.min(maxW / src.width, maxH / src.height);
+  c.width = Math.round(src.width * cropK); c.height = Math.round(src.height * cropK);
+  $('crop').hidden = false;
+  drawCrop();
+}
+function drawCrop() {
+  const c = $('cropCv'), g = c.getContext('2d'), { side, cx, cy } = cropOf(cropSt.zoom, cropSt.ox, cropSt.oy);
+  // после упора в край запоминаем фактический центр, чтобы перетаскивание не «залипало»
+  cropSt.ox = (cx / (src.width / 2) - 1) * 100; cropSt.oy = (cy / (src.height / 2) - 1) * 100;
+  $('cropZoom').value = cropSt.zoom; syncNum($('cropZoom'));
+  g.drawImage(src, 0, 0, c.width, c.height);
+  const x = cx * cropK, y = cy * cropK, r = side / 2 * cropK;
+  g.fillStyle = 'rgba(0,0,0,.62)';
+  g.beginPath(); g.rect(0, 0, c.width, c.height);
+  if ($('shape').value === 'circle') { g.moveTo(x + r, y); g.arc(x, y, r, 0, Math.PI * 2, true); }
+  else g.rect(x + r, y - r, -2 * r, 2 * r);
+  g.fill();
+  g.strokeStyle = '#c89a66'; g.lineWidth = 3;
+  g.beginPath();
+  if ($('shape').value === 'circle') g.arc(x, y, r, 0, Math.PI * 2); else g.rect(x - r, y - r, 2 * r, 2 * r);
+  g.stroke();
+}
+function setCropZoom(z) { cropSt.zoom = Math.min(800, Math.max(100, z)); drawCrop(); }
+$('cropCv').addEventListener('pointerdown', e => {
+  cropDrag = [e.clientX, e.clientY]; $('cropCv').setPointerCapture(e.pointerId); $('cropCv').classList.add('drag');
+});
+$('cropCv').addEventListener('pointermove', e => {
+  if (!cropDrag) return;
+  const dx = e.clientX - cropDrag[0], dy = e.clientY - cropDrag[1]; cropDrag = [e.clientX, e.clientY];
+  // фото стоит на месте, круг ходит за мышью
+  cropSt.ox += dx / cropK / (src.width / 2) * 100; cropSt.oy += dy / cropK / (src.height / 2) * 100;
+  drawCrop();
+});
+$('cropCv').addEventListener('pointerup', () => { cropDrag = null; $('cropCv').classList.remove('drag'); });
+$('cropCv').addEventListener('wheel', e => { e.preventDefault(); setCropZoom(cropSt.zoom * (e.deltaY < 0 ? 1.08 : 1 / 1.08)); }, { passive: false });
+$('cropZoom').addEventListener('input', e => setCropZoom(+e.target.value));
+$('cropReset').onclick = () => { cropSt = { zoom: 100, ox: 0, oy: 0 }; drawCrop(); };
+$('cropCancel').onclick = () => { $('crop').hidden = true; };
+$('cropOk').onclick = () => {
+  $('crop').hidden = true;
+  $('zoom').value = Math.round(cropSt.zoom); $('ox').value = Math.round(cropSt.ox); $('oy').value = Math.round(cropSt.oy);
+  invalidate();
+};
+$('btnCrop').onclick = openCrop;
+$('preview').onclick = openCrop;
+addEventListener('keydown', e => {
+  if ($('crop').hidden) return;
+  if (e.key === 'Escape') $('cropCancel').click();
+  if (e.key === 'Enter') $('cropOk').click();
+});
+$('btnPhoto').onclick = () => $('file').click();
+$('file').onchange = e => e.target.files[0] && loadFile(e.target.files[0]);
+function loadFile(file) {
+  const img = new Image();
+  img.onload = () => useImage(img, file.name.replace(/\.[^.]+$/, ''), true);
+  img.src = URL.createObjectURL(file);
+}
+addEventListener('dragover', e => e.preventDefault());
+addEventListener('drop', e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) loadFile(f); });
+
+// ---------- примеры фото: тренировочное + свои, хранятся в браузере вместе с кадрированием ----------
+const LS_PHOTOS = 'threadPortraits.photos', LS_PRESETS = 'threadPortraits.presets';
+const lsGet = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) || d; } catch { return d; } };
+function lsSet(k, v) {
+  try { localStorage.setItem(k, JSON.stringify(v)); return true; }
+  catch { status('Место для сохранённых фото закончилось — удалите какие-нибудь (крестик на картинке)'); return false; }
+}
+function drawGallery() {
+  const g = $('gallery'); g.textContent = '';
+  const items = [...EXAMPLES];
+  for (const p of lsGet(LS_PHOTOS, [])) items.push({ ...p, key: p.id, own: true });
+  for (const it of items) {
+    const t = document.createElement('div');
+    t.className = 'tile' + (it.key === srcKey ? ' on' : ''); t.title = it.name; t.style.backgroundImage = `url(${it.img})`;
+    t.onclick = () => { const im = new Image(); im.onload = () => useImage(im, it.name, false, it.crop, it.key); im.src = it.img; };
+    if (it.own) {
+      const x = document.createElement('div'); x.className = 'x'; x.textContent = '×'; x.title = 'Убрать из примеров';
+      x.onclick = e => {
+        e.stopPropagation();
+        if (!confirm(`Убрать «${it.name}» из примеров?`)) return;
+        lsSet(LS_PHOTOS, lsGet(LS_PHOTOS, []).filter(p => p.id !== it.key)); drawGallery();
+      };
+      t.append(x);
+    }
+    g.append(t);
+  }
+}
+$('btnSavePhoto').onclick = () => {
+  if (!src) return;
+  const crop = { zoom: +$('zoom').value, ox: +$('ox').value, oy: +$('oy').value };
+  const list = lsGet(LS_PHOTOS, []), old = list.find(p => p.id === srcKey);
+  if (EXAMPLES.some(e => e.key === srcKey)) { status('Это фото и так всегда в примерах'); return; }
+  if (old) old.crop = crop;                                    // уже в примерах — только запоминаем новое кадрирование
+  else {
+    // фото уменьшаем (до 1400 точек по длинной стороне), чтобы в браузере поместилось побольше
+    const k = Math.min(1, 1400 / Math.max(src.width, src.height)), c = document.createElement('canvas');
+    c.width = Math.round(src.width * k); c.height = Math.round(src.height * k);
+    c.getContext('2d').drawImage(src, 0, 0, c.width, c.height);
+    list.push({ id: 'p' + Date.now(), name: srcName || 'Фото', img: c.toDataURL('image/jpeg', 0.85), crop });
+  }
+  if (!lsSet(LS_PHOTOS, list)) return;
+  if (!old) srcKey = list[list.length - 1].id;
+  drawGallery();
+  status(old ? 'Кадрирование этого фото запомнено' : 'Фото сохранено в примеры — оно останется и после перезапуска');
+};
+
+// ---------- мои настройки: именованные наборы (без кадрирования — оно своё у каждого фото) ----------
+const PRESET_IDS = IDS.filter(id => !['zoom', 'ox', 'oy', 'contrast', 'detail'].includes(id));
+function setVal(id, v) { const el = $(id); el.value = v; syncNum(el); }
+function drawPresets(sel) {
+  const ps = lsGet(LS_PRESETS, {}), el = $('presetSel');
+  el.innerHTML = '<option value="">— выбрать —</option>';
+  for (const name of Object.keys(ps)) el.add(new Option(name, name));
+  el.value = sel || '';
+}
+$('presetSel').onchange = () => {
+  const p = lsGet(LS_PRESETS, {})[$('presetSel').value];
+  if (!p) return;
+  for (const id of PRESET_IDS) if (id in p) setVal(id, p[id]);
+  readS(); layout(); invalidate(`Настройки «${$('presetSel').value}» применены — нажмите «▶ Старт»`);
+};
+$('btnPresetSave').onclick = () => {
+  const name = prompt('Название для этих настроек:', $('presetSel').value || '');
+  if (!name) return;
+  const ps = lsGet(LS_PRESETS, {}); ps[name] = {};
+  for (const id of PRESET_IDS) ps[name][id] = $(id).value;
+  if (lsSet(LS_PRESETS, ps)) { drawPresets(name); status(`Настройки сохранены как «${name}»`); }
+};
+$('btnPresetDel').onclick = () => {
+  const name = $('presetSel').value;
+  if (!name || !confirm(`Удалить настройки «${name}»?`)) return;
+  const ps = lsGet(LS_PRESETS, {}); delete ps[name]; lsSet(LS_PRESETS, ps); drawPresets();
+};
+
+// ---------- авто-настройка: лицо, кадр, нити и контраст по самому фото ----------
+function autoSettings() {
+  if (!src) return;
+  const M = 256, k = M / Math.max(src.width, src.height), w = Math.round(src.width * k), h = Math.round(src.height * k);
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const g = c.getContext('2d'); g.drawImage(src, 0, 0, w, h);
+  const d = g.getImageData(0, 0, w, h).data;
+  // лицо — по цвету кожи (то же правило, что и в расчёте); берём 10–90 % кожи, чтобы отдельные пятна не растягивали кадр
+  const xs = [], ys = [];
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = (y * w + x) * 4, r = d[i] / 255, gg = d[i + 1] / 255, b = d[i + 2] / 255;
+    if (r > 0.3 && r - gg > 0.04 && gg - b > -0.02 && r - b > 0.1 && r - gg > (gg - b) * 0.8) { xs.push(x); ys.push(y); }
+  }
+  const face = xs.length > w * h * 0.01;
+  let zoom = 100, ox = 0, oy = 0;
+  if (face) {
+    xs.sort((a, b) => a - b); ys.sort((a, b) => a - b);
+    const q = (a, f) => a[Math.floor(a.length * f)];
+    const x0 = q(xs, 0.1), x1 = q(xs, 0.9), y0 = q(ys, 0.1), y1 = q(ys, 0.9);
+    // голова с частью волос получается лучше, чем лицо вплотную — берём с запасом и чуть выше
+    const side = Math.max(x1 - x0, y1 - y0) * 2.4, cx = (x0 + x1) / 2, cy = (y0 + y1) / 2 - (y1 - y0) * 0.08;
+    zoom = Math.round(Math.min(400, Math.max(100, Math.min(w, h) / side * 100)));
+    ox = Math.round((cx / (w / 2) - 1) * 100); oy = Math.round((cy / (h / 2) - 1) * 100);
+  }
+  setVal('zoom', zoom); setVal('ox', ox); setVal('oy', oy);
+  // что попало в круг: яркость края (фон), разброс яркости, цветность
+  const { side, cx, cy } = cropOf(zoom, ox, oy), sx = cx * k, sy = cy * k, sr = side * k / 2;
+  const lums = []; let satS = 0;
+  for (let y = Math.max(0, Math.floor(sy - sr)); y < Math.min(h, sy + sr); y++) for (let x = Math.max(0, Math.floor(sx - sr)); x < Math.min(w, sx + sr); x++) {
+    const rr = Math.hypot(x - sx, y - sy) / sr; if (rr > 1) continue;
+    const i = (y * w + x) * 4, r = d[i] / 255, gg = d[i + 1] / 255, b = d[i + 2] / 255, l = 0.299 * r + 0.587 * gg + 0.114 * b;
+    lums.push(l); satS += Math.max(r, gg, b) - Math.min(r, gg, b);
+  }
+  lums.sort((a, b) => a - b);
+  // тёмный фон — если хотя бы треть круга тёмная (у Вермеера — фон; на светлом фото тёмные только волосы)
+  const darkBg = lums[Math.floor(lums.length * 0.3)] < 0.23, colorful = satS / Math.max(1, lums.length) > 0.06;
+  setVal('threads', colorful ? (darkBg ? 'color-dark' : 'color-light') : (darkBg ? 'mono-light' : 'mono-dark'));
+  setVal('nails', 400); setVal('lines', 30000); setVal('alpha', 25);
+  setVal('tint', colorful ? 60 : 0); setVal('res', 520); setVal('chaos', 40); setVal('center', face ? 75 : 30);
+  readS(); layout();
+  invalidate(`Авто: ${face ? 'лицо найдено, кадр приближен' : 'лица не нашёл — взят весь кадр'}; нити — ${$('threads').selectedOptions[0].text.toLowerCase()}. Нажмите «▶ Старт»`);
+}
+$('btnAuto').onclick = autoSettings;
+
+// ---------- подготовка: фото → цель, гвозди, палитра ----------
+let R, T, palQ, Pen, PenE, eraser, Wt, RK, nailJit, bg, palette, nailXY, nailSide, phases, layers, pixCache;
+function boxBlur(a, w, h, r) {
+  const tmp = new Float32Array(a.length), out = new Float32Array(a.length), k = 1 / (2 * r + 1);
+  for (let y = 0; y < h; y++) {
+    const row = y * w; let acc = 0;
+    for (let x = -r; x <= r; x++) acc += a[row + Math.min(w - 1, Math.max(0, x))];
+    for (let x = 0; x < w; x++) { tmp[row + x] = acc * k; acc += a[row + Math.min(w - 1, x + r + 1)] - a[row + Math.max(0, x - r)]; }
+  }
+  for (let x = 0; x < w; x++) {
+    let acc = 0;
+    for (let y = -r; y <= r; y++) acc += tmp[Math.min(h - 1, Math.max(0, y)) * w + x];
+    for (let y = 0; y < h; y++) { out[y * w + x] = acc * k; acc += tmp[Math.min(h - 1, y + r + 1) * w + x] - tmp[Math.max(0, y - r) * w + x]; }
+  }
+  return out;
+}
+// размытие цветной цели (три прохода «коробкой» ≈ гауссово размытие)
+function blurRGB(a, r) {
+  const n = R * R, out = new Float32Array(n * 3);
+  for (let ch = 0; ch < 3; ch++) {
+    let c = new Float32Array(n);
+    for (let i = 0; i < n; i++) c[i] = a[i * 3 + ch];
+    for (let k = 0; k < 3; k++) c = boxBlur(c, R, R, r);
+    for (let i = 0; i < n; i++) out[i * 3 + ch] = c[i];
+  }
+  return out;
+}
+// основные цвета фото (k-средних) — из них делаются цветные нити.
+// Начальные центры выбираются «подальше друг от друга», чтобы небольшое, но яркое пятно
+// (синий тюрбан на тёмном фоне) получило свою нить, а не утонуло в оттенках фона
+function mainColors(k) {
+  const pts = [], r = mulberry32(7);
+  for (let i = 0; i < R * R; i += 5) if (inside(i)) pts.push([T[i * 3], T[i * 3 + 1], T[i * 3 + 2]]);
+  const d2 = (a, b) => (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2;
+  const sat = c => Math.max(...c) - Math.min(...c);
+  const K = k + 3;
+  let cen = [pts[Math.floor(r() * pts.length)].slice()];
+  while (cen.length < K) {
+    const dist = pts.map(p => Math.min(...cen.map(c => d2(c, p))) * (0.3 + sat(p)));   // яркие цвета — в приоритете
+    let t = r() * dist.reduce((x, y) => x + y, 0), j = 0;
+    while (j < pts.length - 1 && (t -= dist[j]) > 0) j++;
+    cen.push(pts[j].slice());
+  }
+  let cnt = [];
+  for (let it = 0; it < 15; it++) {
+    const sum = cen.map(() => [0, 0, 0, 0]);
+    for (const p of pts) {
+      let bj = 0, bd = 1e9;
+      cen.forEach((c, j) => { const d = d2(c, p); if (d < bd) { bd = d; bj = j; } });
+      sum[bj][0] += p[0]; sum[bj][1] += p[1]; sum[bj][2] += p[2]; sum[bj][3]++;
+    }
+    cen = cen.map((c, j) => sum[j][3] ? [sum[j][0] / sum[j][3], sum[j][1] / sum[j][3], sum[j][2] / sum[j][3]] : c);
+    cnt = sum.map(x => x[3]);
+  }
+  // нить чуть насыщеннее среднего цвета пятна — в смеси с фоном она бледнеет
+  const satur = c => { const m = (c[0] + c[1] + c[2]) / 3; return c.map(v => Math.min(1, Math.max(0, m + (v - m) * 1.2))); };
+  // чёрная и белая нити уже есть; из остальных берём заметные пятна, не похожие друг на друга
+  const cand = cen.map((c, j) => ({ c: satur(c), w: cnt[j] / pts.length * (0.3 + sat(c) * 3) }))
+    .filter(o => o.w > 0.004 && d2(o.c, [0, 0, 0]) > 0.05 && d2(o.c, [1, 1, 1]) > 0.05)
+    .sort((x, y) => y.w - x.w);
+  const out = [];
+  // сравниваем уже чистые цвета нитей: тёмно- и светло-жёлтый после этого — одна и та же нить
+  for (const o of cand) { const c = pure(o.c, bg); if (out.length < k && out.every(q => d2(q, c) > 0.06)) out.push(c); }
+  return out;
+}
+const inside = i => {
+  if (S.shape === 'square') return true;
+  const x = i % R + 0.5 - R / 2, y = ((i / R) | 0) + 0.5 - R / 2;
+  return x * x + y * y <= (R / 2 - 1) ** 2;
+};
+
+// нитка чище и ярче среднего цвета фото: тёмные места на чёрном фоне получаются тем, что нитей там меньше
+// (на белом — наоборот, цвет сдвигается к насыщенному тёмному)
+function pure(c, bg) {
+  // только частично: полностью «чистый» тон кожи на белом — ярко-рыжая нить, лицо выходит красным
+  const k = 0.4;
+  let p;
+  if (bg[0] === 0) { const m = Math.max(...c, 0.05); p = c.map(v => v / m); }
+  else { const m = Math.min(...c, 0.95); p = c.map(v => (v - m) / (1 - m)); }
+  return c.map((v, ch) => v + (p[ch] - v) * k);
+}
+
+// расчёт ведётся в пространстве «яркость + оттенок», оттенок весит больше: иначе белая нить на синей повязке
+// считается почти такой же удачной, как синяя (в RGB у них совпадает синий канал)
+const CK = 2.2;
+function qOf(a, i3, out, o3) {
+  const y = 0.299 * a[i3] + 0.587 * a[i3 + 1] + 0.114 * a[i3 + 2];
+  out[o3] = y; out[o3 + 1] = (a[i3 + 2] - y) * CK; out[o3 + 2] = (a[i3] - y) * CK;
+  return out;
+}
+function fromQ(q) {
+  const y = q[0], b = y + q[1] / CK, r = y + q[2] / CK, g = (y - 0.299 * r - 0.114 * b) / 0.587;
+  return [r, g, b].map(v => Math.min(1, Math.max(0, v)));
+}
+// подкраска середины нити: доля цвета середины в точке s (0..1 по длине нити) — плавный «горб» sin²
+const tintW = s => Math.sin(Math.PI * s) ** 2;
+function toQ(a) { const out = new Float32Array(a.length); for (let i = 0; i < a.length; i += 3) qOf(a, i, out, i); return out; }
+
+function prepare() {
+  R = S.res; const n = R * R;
+  const oc = document.createElement('canvas'); oc.width = oc.height = R; const o = oc.getContext('2d');
+  const w = src.width, h = src.height, { side, cx, cy } = cropOf(S.zoom, S.ox, S.oy);
+  const sx = cx - side / 2, sy = cy - side / 2;
+  o.drawImage(src, sx, sy, side, side, 0, 0, R, R);
+  const d = o.getImageData(0, 0, R, R).data;
+  const mono = S.threads.startsWith('mono');
+
+  // автоуровни по яркости внутри рамки + контраст
+  const lum = new Float32Array(n), vals = [];
+  for (let i = 0; i < n; i++) { lum[i] = (0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2]) / 255; if (inside(i)) vals.push(lum[i]); }
+  vals.sort((a, b) => a - b);
+  const lo = vals[Math.floor(vals.length * 0.02)], hi = vals[Math.floor(vals.length * 0.98)], kk = 1 / Math.max(0.05, hi - lo);
+  const con = 1 + S.contrast / 100 * 1.5;
+  const lev = v => Math.min(1, Math.max(0, 0.5 + ((v - lo) * kk - 0.5) * con));
+  T = new Float32Array(n * 3);
+  // контраст — только по яркости (поканальный контраст уводил кожу в рыжий); отличие цвета от серого
+  // растёт с яркостью лишь слегка: при сильном контрасте высветленная кожа иначе становится
+  // золотисто-рыжей, и в конце расчёта золотые нити ложатся поверх всего лица
+  for (let i = 0; i < n; i++) {
+    const L = lev(lum[i]), k = Math.min(1.2, Math.sqrt(L / Math.max(0.02, lum[i])));
+    for (let ch = 0; ch < 3; ch++) T[i * 3 + ch] = mono ? L : Math.min(1, Math.max(0, L + (d[i * 4 + ch] / 255 - lum[i]) * k));
+  }
+
+  const WH = [1, 1, 1], BK = [0, 0, 0];
+  // вторая нить цвета фона «стирает» лишнее: без неё ошибку нельзя исправить, и расчёт рано останавливается
+  if (S.threads === 'mono-dark') { bg = WH; palette = [BK, WH]; }
+  else if (S.threads === 'mono-light') { bg = BK; palette = [WH, BK]; }
+  else { bg = S.threads === 'color-light' ? WH : BK; palette = [BK, WH, ...mainColors(4)]; }   // чёрная и белая есть всегда — ими проще всего лепить светотень
+  for (let i = 0; i < n; i++) if (!inside(i)) T.set(bg, i * 3);
+
+  // гвозди: по окружности или по периметру квадрата, нумерация с верхней точки по часовой стрелке
+  const N = S.nails, c = R / 2;
+  nailXY = []; nailSide = [];
+  // при строго ровном шаге хорды проходят на одних и тех же расстояниях от центра — в центре видны кольца;
+  // небольшой разброс гвоздей (до ±0.3 шага) их убирает
+  const jr = mulberry32(N); nailJit = Array.from({ length: N }, () => (jr() - 0.5) * 0.6);
+  for (let i = 0; i < N; i++) {
+    if (S.shape === 'circle') {
+      const an = -Math.PI / 2 + 2 * Math.PI * (i + nailJit[i]) / N;
+      nailXY.push([c + (c - 1.5) * Math.cos(an), c + (c - 1.5) * Math.sin(an)]); nailSide.push(-1);
+    } else {
+      const L = R - 3, t = i / N * 4 * L, s = Math.floor(t / L), f = t - s * L;
+      nailXY.push([[1.5 + f, 1.5], [1.5 + L, 1.5 + f], [1.5 + L - f, 1.5 + L], [1.5, 1.5 + L - f]][s]); nailSide.push(s);
+    }
+  }
+  pixCache = new Map();
+
+  // порядок заполнения: сначала линии по сильно размытому фото (хаос, массы), потом по менее размытому (формы), потом точно (детали)
+  const ch = S.chaos / 100, rA = Math.max(1, Math.round(R * 0.045 * ch)), rB = Math.max(1, Math.round(rA / 3));
+  // until — доля линий слоя, после которой фаза кончается
+  phases = [];
+  if (ch > 0) {
+    phases.push({ name: 'хаос — заполняю пятна', until: 0.35 * ch, T: blurRGB(T, rA), topK: 1 + Math.round(7 * ch) });
+    phases.push({ name: 'проступают формы', until: 0.6 * ch, T: blurRGB(T, rB), topK: 1 + Math.round(2 * ch) });
+  }
+  phases.push({ name: 'детали', until: 1, T, topK: 1 });
+
+  // все нити выбираются одновременно; порядок заполнения задают фазы (хаос → детали) и «От лица к краям»
+  layers = [[...palette.keys()]];
+
+  // вес ошибки: на контурах (глаза, рот, линия носа) ошибка «дороже», чем на ровной коже или фоне —
+  // иначе нить через глаз не окупается, потому что заодно затемняет светлое лицо
+  const gr = new Float32Array(n);
+  for (let i = 0; i < n; i++) gr[i] = (T[i * 3] + T[i * 3 + 1] + T[i * 3 + 2]) / 3;
+  let e = new Float32Array(n);
+  for (let y = 1; y < R - 1; y++) for (let x = 1; x < R - 1; x++) {
+    const i = y * R + x;
+    const gx = gr[i - R + 1] + 2 * gr[i + 1] + gr[i + R + 1] - gr[i - R - 1] - 2 * gr[i - 1] - gr[i + R - 1];
+    const gy = gr[i + R - 1] + 2 * gr[i + R] + gr[i + R + 1] - gr[i - R - 1] - 2 * gr[i - R] - gr[i - R + 1];
+    e[i] = Math.hypot(gx, gy);
+  }
+  for (let k = 0; k < 2; k++) e = boxBlur(e, R, R, Math.max(1, Math.round(R / 200)));
+  const ev = Array.from(e).filter((v, i) => inside(i)).sort((a, b) => a - b), e95 = ev[Math.floor(ev.length * 0.95)] || 1;
+  Wt = new Float32Array(n);
+  for (let i = 0; i < n; i++) Wt[i] = 1 + S.detail / 100 * 6 * Math.min(1, e[i] / e95);
+
+  // «От лица к краям»: где больше всего мелких черт (глаза, рот, нос) — туда нити идут первыми,
+  // затем крупные формы (повязка, одежда), фон и края — последними. RK — место пикселя в этой очереди (0..1)
+  // лицо находим по цвету кожи (тёплый, красноты больше, чем желтизны — так светлая ткань и жёлтая куртка не в счёт; не тёмный); на ч/б фото — по густоте мелких черт
+  const rb = Math.max(2, Math.round(R * 0.04));
+  let sk = new Float32Array(n), ed = new Float32Array(n), skN = 0;
+  for (let i = 0; i < n; i++) {
+    const r = d[i * 4] / 255, g = d[i * 4 + 1] / 255, b = d[i * 4 + 2] / 255;
+    if (inside(i) && r > 0.3 && r - g > 0.04 && g - b > -0.02 && r - b > 0.1 && r - g > (g - b) * 0.8) { sk[i] = 1; skN++; }
+    ed[i] = Math.min(1, e[i] / e95);
+  }
+  // главные черты — зрачки, уголки глаз, линия рта, ноздри: небольшие места темнее окружения.
+  // Тонкие линии (оправа очков, пряди волос на лбу, щетина) сглаживаются малым размытием и почти не считаются
+  let sm = gr, bg2 = gr;
+  for (let k = 0; k < 2; k++) sm = boxBlur(sm, R, R, Math.max(1, Math.round(R * 0.01)));
+  for (let k = 0; k < 3; k++) bg2 = boxBlur(bg2, R, R, Math.max(2, Math.round(R * 0.03)));
+  let ft = new Float32Array(n);
+  for (let i = 0; i < n; i++) ft[i] = Math.max(0, bg2[i] - sm[i]);
+  for (let k = 0; k < 3; k++) { sk = boxBlur(sk, R, R, rb); ed = boxBlur(ed, R, R, rb); }
+  const useSkin = skN > n * 0.01;
+  const face = new Float32Array(n);
+  for (let i = 0; i < n; i++) face[i] = Math.min(1, (useSkin ? sk[i] : ed[i]) * 1.5);
+  const fv = Array.from(ft).filter((v, i) => face[i] > 0.5).sort((a, b) => a - b), f97 = fv[Math.floor(fv.length * 0.97)] || 1;
+  for (let i = 0; i < n; i++) ft[i] = Math.min(1, ft[i] / f97) * face[i];
+  // контуры вне лица (причёска, одежда, фон) почти не важны — иначе нити уходят на волосы, а лицо портится
+  for (let i = 0; i < n; i++) Wt[i] = 1 + (Wt[i] - 1) * (0.25 + 0.75 * face[i]);
+  // очередь: сначала глаза и губы (мелкие черты внутри лица), потом остальное лицо, затем повязка/одежда, края
+  // очередь идёт не по самим тёмным точкам, а по их окрестности: светлая кожа вокруг зрачков и рта
+  // и делает их видимыми, поэтому глаза и рот проступают первыми, а не паутина по всему центру
+  let fz = ft, mz = 0;
+  for (let k = 0; k < 3; k++) fz = boxBlur(fz, R, R, Math.max(2, Math.round(R * 0.02)));
+  for (let i = 0; i < n; i++) mz = Math.max(mz, fz[i]);
+  const P = new Float32Array(n);
+  for (let i = 0; i < n; i++) P[i] = face[i] + 6 * fz[i] / (mz || 1) + ed[i] * 0.3;
+  // на лице ошибка «дороже»: иначе нить через глаз не окупается и лицо выходит пустым светлым пятном.
+  // Но вся кожа (и лоб под прядями) — лишь немного, главное — черты: светлые нити обходят зрачки стороной
+  const FB = 1, FE = 12;
+  for (let i = 0; i < n; i++) Wt[i] *= 1 + FB * face[i] + FE * ft[i];
+  // а испортить лицо — ещё дороже: длинная нить, которая затемняет кожу между глазами, потом ничем не спрячется.
+  // Поэтому зрачки, уголки глаз и губы собираются косыми нитями, которые быстро уходят с лица
+  const PN = 0.7;
+  Pen = new Float32Array(n);
+  for (let i = 0; i < n; i++) Pen[i] = 1 + PN * face[i];
+  // нить цвета фона — «ластик». В конце расчёта она затемняет пересвеченные края и фон, но длинная
+  // чёрная хорда через лицо его портит, поэтому ластику испортить лицо гораздо дороже
+  const PE = 8;
+  PenE = new Float32Array(n);
+  for (let i = 0; i < n; i++) PenE[i] = 1 + PE * face[i];
+  // хаос — только вокруг лица: на лице с первых нитей цель чёткая, иначе размытые пятна заливают глаза светом,
+  // и потом их уже не вернуть
+  for (const ph of phases) if (ph.T !== T) for (let i = 0; i < n; i++) {
+    const f = face[i];
+    if (f > 0) for (let ch = 0; ch < 3; ch++) ph.T[i * 3 + ch] += (T[i * 3 + ch] - ph.T[i * 3 + ch]) * f;
+  }
+  for (const ph of phases) ph.Q = toQ(ph.T);
+  palQ = palette.map(c => qOf(c, 0, new Float32Array(3), 0));
+  eraser = palette.findIndex(c => c.every((v, ch) => v === bg[ch]));
+  const order = [];
+  for (let i = 0; i < n; i++) if (inside(i)) {
+    const x = i % R - R / 2, y = (i / R | 0) - R / 2, rr = (x * x + y * y) / (R * R / 4);
+    order.push([P[i] * (1 - 0.6 * rr), i]);                        // ближе к центру — чуть раньше
+  }
+  order.sort((a, b) => b[0] - a[0]);
+  RK = new Float32Array(n).fill(1);
+  order.forEach(([, i], k) => { RK[i] = k / order.length; });
+  drawPreview();
+}
+function drawPreview() {
+  const p = $('preview'), g = p.getContext('2d'), img = g.createImageData(R, R);
+  for (let i = 0; i < R * R; i++) for (let ch = 0; ch < 3; ch++) img.data[i * 4 + ch] = T[i * 3 + ch] * 255;
+  for (let i = 0; i < R * R; i++) img.data[i * 4 + 3] = 255;
+  const oc = document.createElement('canvas'); oc.width = oc.height = R; oc.getContext('2d').putImageData(img, 0, 0);
+  g.clearRect(0, 0, p.width, p.height); g.drawImage(oc, 0, 0, p.width, p.height);
+}
+
+// ---------- расчёт порядка нитей ----------
+function linePix(a, b) {
+  const N = S.nails, key = a < b ? a * N + b : b * N + a;
+  let p = pixCache.get(key); if (p) return p;
+  const [x0, y0] = nailXY[a], [x1, y1] = nailXY[b];
+  const L = Math.max(1, Math.ceil(Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0))));
+  const arr = new Int32Array(L + 1); let m = 0, last = -1;
+  for (let s = 0; s <= L; s++) {
+    const x = (x0 + (x1 - x0) * s / L) | 0, y = (y0 + (y1 - y0) * s / L) | 0;
+    if (x < 0 || y < 0 || x >= R || y >= R) continue;
+    const k = y * R + x; if (k !== last) { arr[m++] = k; last = k; }
+  }
+  p = arr.subarray(0, m); pixCache.set(key, p); return p;
+}
+function allowed(i, j) {
+  const N = S.nails, d = Math.abs(i - j), skip = Math.max(3, Math.round(N / 16));
+  if (Math.min(d, N - d) < skip) return false;                       // слишком близкие гвозди — короткая бесполезная нить
+  return S.shape === 'circle' || nailSide[i] !== nailSide[j];      // в квадрате — не вдоль одной стороны
+}
+let seq = [], used, curNail, phaseIdx, layerIdx, layerStart, layerCap, layerStarts, cur, rnd, computing = false, computeDone = false;
+// новый слой получает поровну из оставшихся линий; что слой не израсходовал — достаётся следующим
+function startLayer() {
+  layerStart = seq.length; layerStarts.push(seq.length);
+  layerCap = Math.round((S.lines - seq.length) / (layers.length - layerIdx));
+  phaseIdx = 0; used = new Set();
+}
+function nextLayer() { if (++layerIdx < layers.length) { startLayer(); return true; } return false; }
+function mulberry32(a) { return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+
+// «От лица к краям» меняет только ПОРЯДОК показа готовых нитей, сам расчёт идёт по всей картине сразу.
+// Раньше этот ползунок ограничивал, где расчёт может рисовать, — и тогда то лицо закрашивалось нитями
+// к краям, то края недорисовывались. Теперь ord — очередь показа: нити через лицо и черты — первыми
+let ord = null;
+function buildOrder() {
+  const n = seq.length, c = S.center / 100;
+  if (!n || !c) { ord = null; return; }
+  const key = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    // чем раньше в очереди RK пиксели нити, тем раньше и нить; доля от расчёта сохраняет «сначала хаос»
+    const pix = linePix(seq[i][0], seq[i][1]); let m = 1;
+    for (let q = 0; q < pix.length; q += 2) m = Math.min(m, RK[pix[q]]);
+    let sum = 0, cnt = 0;
+    for (let q = 0; q < pix.length; q += 2) { sum += RK[pix[q]]; cnt++; }
+    key[i] = (1 - c) * i / n + c * (0.6 * m + 0.4 * sum / cnt);
+  }
+  ord = Array.from({ length: n }, (_, i) => i).sort((a, b) => key[a] - key[b]);
+}
+// i-я нить в порядке показа
+const lineAt = i => seq[ord ? ord[i] : i];
+
+// подкраска середины: насколько выгоднее нить, если её середину сдвинуть на u (в пространстве Q).
+// Выигрыш квадратичен по u, поэтому лучший цвет считается сразу по суммам вдоль нити; затем он
+// приводится к реальному цвету (0..1) и ослабляется ползунком. Возвращает [прибавка выигрыша, цвет RGB] или null
+const TW = Float32Array.from({ length: 257 }, (_, k) => tintW(k / 256));
+function tintGain(col, a, Sw, Sww, SwD, Swp) {
+  const st = S.tint / 100;
+  if (!st || Sww < 1e-9) return null;
+  const k = [0, 1, 2].map(ch => SwD[ch] - a * (col[ch] * Sw - Swp[ch]));   // ∂выигрыш/∂u ÷ 2a
+  const tq = [0, 1, 2].map(ch => col[ch] + k[ch] / (a * Sww));
+  const base = fromQ(col), tc = fromQ(tq).map((v, ch) => base[ch] + (v - base[ch]) * st);
+  const tQ = qOf(tc, 0, new Float32Array(3), 0);
+  let g = 0;
+  for (let ch = 0; ch < 3; ch++) { const u = tQ[ch] - col[ch]; g += 2 * a * u * k[ch] - a * a * u * u * Sww; }
+  return g > 0 ? [g, tc] : null;
+}
+
+// один шаг: от текущего гвоздя перебираем все гвозди и все цвета нити, берём лучшую линию
+function stepOnce() {
+  if (layerIdx >= layers.length) return false;
+  let ph = phases[phaseIdx];
+  while (ph && seq.length >= layerStart + Math.round(layerCap * ph.until)) ph = phases[++phaseIdx];
+  if (!ph) return nextLayer();
+  const colors = layers[layerIdx];
+  const Tp = ph.Q, a = S.alpha / 100, from = curNail, N = S.nails, top = [];
+  for (let j = 0; j < N; j++) {
+    if (!allowed(from, j)) continue;
+    const key = from < j ? from * N + j : j * N + from;
+    if (used.has(key)) continue;
+    const pix = linePix(from, j), L = pix.length;
+    if (L < 4) continue;
+    // соседние точки нити почти одинаковы, поэтому выигрыш длинной нити считаем по каждой второй — вдвое быстрее
+    const st = L > 40 ? 2 : 1, norm = st / L, tint = S.tint > 0 && L >= 8;
+    // суммы для подкраски середины (не зависят от цвета нити)
+    let Sw = 0, Sww = 0; const SwD = [0, 0, 0], Swp = [0, 0, 0];
+    if (tint) for (let q = 0; q < L; q += st) {
+      const i = pix[q], i3 = i * 3, w = TW[(q * 256 / (L - 1)) | 0], ww = Wt[i] * w;
+      Sw += ww; Sww += ww * w;
+      for (let ch = 0; ch < 3; ch++) { SwD[ch] += ww * (Tp[i3 + ch] - cur[i3 + ch]); Swp[ch] += ww * cur[i3 + ch]; }
+    }
+    for (const c of colors) {
+      const [cr, cg, cb] = palQ[c], PP = c === eraser ? PenE : Pen;
+      let g = 0;
+      // выигрыш = насколько уменьшится ошибка, если нить ляжет полупрозрачно поверх текущего рисунка
+      for (let q = 0; q < L; q += st) {
+        const i3 = pix[q] * 3;
+        let p = cur[i3], dd = (cr - p) * a, gq = dd * (2 * (Tp[i3] - p) - dd);
+        p = cur[i3 + 1]; dd = (cg - p) * a; gq += dd * (2 * (Tp[i3 + 1] - p) - dd);
+        p = cur[i3 + 2]; dd = (cb - p) * a; gq += dd * (2 * (Tp[i3 + 2] - p) - dd);
+        g += gq < 0 ? gq * Wt[pix[q]] * PP[pix[q]] : gq * Wt[pix[q]];
+      }
+      const tg = tint ? tintGain(palQ[c], a, Sw, Sww, SwD, Swp) : null;
+      const sc = (g + (tg ? tg[0] : 0)) * norm;
+      if (sc > 0 && (top.length < ph.topK || sc > top[top.length - 1][0])) {
+        top.push([sc, j, c, tg && tg[1]]); top.sort((x, y) => y[0] - x[0]); if (top.length > ph.topK) top.pop();
+      }
+    }
+  }
+  if (!top.length) {
+    if (ph.T !== T) { phaseIdx++; return true; }                   // размытая фаза исчерпана — переходим к следующей
+    // с этого гвоздя ни одна линия больше не помогает — рисунок готов. Обходной ход дальше пробовали:
+    // расчёт продолжался, но новые нити ложились поверх готового портрета и размывали его
+    return nextLayer();
+  }
+  // в фазе хаоса — случайная из нескольких лучших линий: так получается паутина, а не сразу точный рисунок
+  const [, j, c, tcol] = top[Math.floor(rnd() * top.length)];
+  const col = palQ[c], pix = linePix(from, j), L = pix.length;
+  // pix идут от меньшего номера гвоздя к большему — по нему и считаем положение вдоль нити
+  const tQ = tcol ? qOf(tcol, 0, new Float32Array(3), 0) : null;
+  for (let q = 0; q < L; q++) {
+    const i3 = pix[q] * 3, w = tQ ? TW[(q * 256 / (L - 1)) | 0] : 0;
+    for (let ch = 0; ch < 3; ch++) cur[i3 + ch] += (col[ch] + (tQ ? (tQ[ch] - col[ch]) * w : 0) - cur[i3 + ch]) * a;
+  }
+  used.add(from < j ? from * N + j : j * N + from);
+  seq.push([from, j, c, tcol || null]);
+  curNail = j;
+  return true;
+}
+
+function startCompute() {
+  if (!src) return;
+  stopPlay();
+  readS(); prepare();
+  seq = []; ord = null; layerStarts = []; layerIdx = 0; curNail = 0; rnd = mulberry32(20190806); startLayer();
+  cur = new Float32Array(R * R * 3);
+  const bgQ = qOf(bg, 0, new Float32Array(3), 0);
+  for (let i = 0; i < R * R; i++) cur.set(bgQ, i * 3);
+  setPaused(false);
+  computing = true; computeDone = false; shown = 0;
+  layout();
+  updateButtons();
+}
+function finishCompute() {
+  computing = false; computeDone = true;
+  buildOrder();
+  $('linesNote').textContent = seq.length < S.lines
+    ? `понадобилось ${seq.length} — больше нити рисунок не улучшают` : `использованы все ${seq.length}`;
+  render();                                                     // убрать подсветку последней нити
+  status(`Готово: ${seq.length} линий, ${S.nails} гвоздей. «▶ Старт» — показать порядок нитей, «● Запись» — сохранить клип.`);
+  if (pendingRec) { pendingRec = false; startRec(); }
+  updateButtons();
+}
+// настройки или фото изменились: пустые пяльцы, расчёт — только по кнопке
+let pendingRec = false;
+function invalidate(msg) {
+  if (!src) return;
+  stopPlay(); setPaused(false);
+  readS(); prepare();
+  if (seq.length && computeDone) $('linesNote').textContent = `в прошлый раз понадобилось ${seq.length}`;
+  seq = []; computing = false; computeDone = false; shown = 0; pendingRec = false;
+  layout();
+  status(msg || 'Настройки изменены — нажмите «▶ Старт»');
+  updateButtons();
+}
+// Старт/Пауза: идёт расчёт или показ — пауза/продолжить; рассчитано — показ с начала; не рассчитано — расчёт
+function toggleStart() {
+  if (computing || playing) setPaused(!paused);
+  else if (computeDone) startPlay();
+  else startCompute();
+  updateButtons();
+}
+function updateButtons() {
+  const t = (computing || playing) ? (paused ? '▶ Продолжить' : '⏸ Пауза') : '▶ Старт';
+  if ($('btnStart').textContent !== t) $('btnStart').textContent = t;
+  // схема — это список готовых линий, до конца расчёта её ещё нет
+  $('btnScheme').disabled = !computeDone;
+  $('btnScheme').title = computeDone ? 'Скачать текстовый файл: по какому гвоздю за каким натягивать нить — чтобы сделать настоящий портрет на пяльцах' : 'Будет доступна, когда расчёт закончится';
+}
+
+// ---------- отрисовка ----------
+let W, H, D, X0, Y0, shown = 0, bigView = false;
+const rgb = (c, al = 1) => `rgba(${Math.round(c[0] * 255)},${Math.round(c[1] * 255)},${Math.round(c[2] * 255)},${al})`;
+const nailPx = i => [X0 + nailXY[i][0] / R * D, Y0 + nailXY[i][1] / R * D];
+// цвет нити: одноцветная или с подкрашенной серединой (плавный переход к концам)
+function threadStyle(g, a, b, c, t) {
+  if (!t) return rgb(palette[c]);
+  const lo = Math.min(a, b), hi = Math.max(a, b), [x0, y0] = nailPx(lo), [x1, y1] = nailPx(hi);
+  const gr = g.createLinearGradient(x0, y0, x1, y1), b0 = palette[c];
+  for (let k = 0; k <= 8; k++) { const s = k / 8, w = tintW(s); gr.addColorStop(s, rgb(b0.map((v, ch) => v + (t[ch] - v) * w))); }
+  return gr;
+}
+
+function layout() {
+  const dpr = devicePixelRatio || 1;
+  const sizes = { '9x16': [1080, 1920], '1x1': [1080, 1080], '16x9': [1920, 1080] };
+  [W, H] = S.frame === 'window' ? [Math.round(innerWidth * dpr), Math.round(innerHeight * dpr)] : sizes[S.frame];
+  for (const c of [cv, base, decor]) { c.width = W; c.height = H; }
+  const k = Math.min(innerWidth / W, innerHeight / H);
+  cv.style.width = W * k + 'px'; cv.style.height = H * k + 'px';
+  cv.style.left = (innerWidth - W * k) / 2 + 'px'; cv.style.top = (innerHeight - H * k) / 2 + 'px';
+  // в режиме «Окно» пяльцы ставим правее панели, чтобы она их не закрывала
+  const pw = S.frame === 'window' && !$('panel').classList.contains('hidden') ? ($('panel').offsetWidth + 24) * dpr : 0;
+  D = Math.min(W - pw, H) * (pw ? 0.94 : bigView ? 0.98 : 0.86); X0 = pw + (W - pw - D) / 2; Y0 = (H - D) / 2;
+  if (!R) return;
+  drawDecor(); resetBase(); drawLines(0, shown); render();
+}
+function resetBase() {
+  bctx.globalAlpha = 1;
+  bctx.fillStyle = '#121116'; bctx.fillRect(0, 0, W, H);
+  bctx.fillStyle = rgb(bg);
+  if (S.shape === 'circle') { bctx.beginPath(); bctx.arc(X0 + D / 2, Y0 + D / 2, D / 2, 0, Math.PI * 2); bctx.fill(); }
+  else bctx.fillRect(X0, Y0, D, D);
+}
+function drawDecor() {
+  dctx.clearRect(0, 0, W, H);
+  const nr = Math.max(1.2, D * 0.0028);
+  dctx.fillStyle = 'rgba(160,160,160,.55)';   // только гвозди, без обруча
+  for (let i = 0; i < nailXY.length; i++) { const [x, y] = nailPx(i); dctx.beginPath(); dctx.arc(x, y, nr, 0, Math.PI * 2); dctx.fill(); }
+}
+function drawLines(i0, i1) {
+  // нить рисуется узкой (1–2 точки экрана) и плотной, а не широкой полупрозрачной полосой: краски на картине
+  // столько же, сколько в расчёте (ширина × плотность), но каждая нить видна чётко — это и даёт текстуру
+  const al = S.alpha / 100, w = D / R, ink = al * w;
+  const tw = Math.max(devicePixelRatio || 1, ink / 0.9), op = Math.min(1, ink / tw);
+  bctx.lineCap = 'butt';
+  for (let i = i0; i < i1; i++) {
+    const [a, b, c, t] = lineAt(i), [x0, y0] = nailPx(a), [x1, y1] = nailPx(b);
+    bctx.strokeStyle = threadStyle(bctx, a, b, c, t);
+    bctx.globalAlpha = op; bctx.lineWidth = tw;
+    bctx.beginPath(); bctx.moveTo(x0, y0);
+    if (S.texture === 'wool') {
+      // шерсть: нить чуть неровная, как скрученная пряжа — без размытого ворса, края остаются чёткими
+      const r = mulberry32(i * 7919 + 1), nx = y0 - y1, ny = x1 - x0, len = Math.hypot(nx, ny) || 1, K = 14;
+      for (let k = 1; k < K; k++) { const s = k / K, o = (r() - 0.5) * tw * 2.2 / len; bctx.lineTo(x0 + (x1 - x0) * s + nx * o, y0 + (y1 - y0) * s + ny * o); }
+    }
+    bctx.lineTo(x1, y1); bctx.stroke();
+    if (S.texture === 'silk') {
+      // шёлк: блик посередине нити, ярче, когда нить лежит поперёк света (свет сверху слева)
+      const sh = Math.max(0, Math.cos(2 * (Math.atan2(y1 - y0, x1 - x0) + Math.PI / 4)));
+      if (sh > 0.05) {
+        bctx.globalAlpha = op * 0.45 * sh; bctx.strokeStyle = '#fff'; bctx.lineWidth = tw * 0.5;
+        bctx.beginPath(); bctx.moveTo(x0, y0); bctx.lineTo(x1, y1); bctx.stroke();
+      }
+    }
+  }
+  bctx.globalAlpha = 1;
+}
+// active — натягиваемая сейчас нить: [номер в seq, доля пройденного пути, заметность]
+function render(active) {
+  ctx.drawImage(base, 0, 0); ctx.drawImage(decor, 0, 0);
+  if (!active || !seq[active[0]]) return;
+  const [i, f, vis] = active, [a, b, c, t] = lineAt(i), [x0, y0] = nailPx(a), [x1, y1] = nailPx(b);
+  const x = x0 + (x1 - x0) * f, y = y0 + (y1 - y0) * f;
+  ctx.globalAlpha = vis; ctx.strokeStyle = threadStyle(ctx, a, b, c, t); ctx.lineWidth = Math.max(devicePixelRatio || 1, S.alpha / 100 * D / R / 0.9);   // той же толщины, что и нить
+  ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x, y); ctx.stroke();
+  ctx.fillStyle = '#ffd88a'; ctx.beginPath(); ctx.arc(x, y, D * 0.004, 0, Math.PI * 2); ctx.fill();  // «игла» на конце нити
+  ctx.globalAlpha = 1;
+}
+
+// ---------- воспроизведение: медленно в начале, затем разгон ----------
+let playing = false, playStart = 0, holdUntil = 0, paused = false, pausedAt = 0;
+function startPlay() {
+  if (!computeDone) { status('Подождите, расчёт ещё идёт…'); return false; }
+  setPaused(false);
+  resetBase(); shown = 0; playing = true; playStart = performance.now(); holdUntil = 0;
+  updateButtons();
+  return true;
+}
+// пауза останавливает и расчёт, и показ; при продолжении показ идёт с того же места
+function setPaused(v) {
+  if (v === paused) return;
+  paused = v;
+  if (v) pausedAt = performance.now(); else playStart += performance.now() - pausedAt;
+  if (rec) v ? rec.pause() : rec.resume();                     // в клип пауза не попадает
+  if (v) status(computing ? `Пауза — рассчитано ${seq.length} линий` : `Пауза — показано ${shown} из ${seq.length} линий`);
+  updateButtons();
+}
+function stopPlay() { playing = false; if (rec) stopRec(); }
+// сколько линий натянуто к моменту u (0..1) клипа
+const linesAt = u => seq.length * Math.pow(Math.min(1, Math.max(0, u)), S.ease / 10);
+
+function frame(now) {
+  if (paused) { if (!TEST) requestAnimationFrame(frame); return; }
+  if (computing) {
+    const t0 = performance.now();
+    while (performance.now() - t0 < 14) if (!stepOnce()) { finishCompute(); break; }
+    if (computing) status(`Расчёт: ${seq.length} линий (не больше ${S.lines})${layers.length > 1 ? ` — слой ${Math.min(layerIdx + 1, layers.length)} из ${layers.length}` : ''}${phases[phaseIdx] ? ` — этап ${phaseIdx + 1} из ${phases.length}: ${phases[phaseIdx].name}` : ''}${pendingRec ? '. Запись клипа начнётся сама после расчёта' : ''}`);
+    drawLines(shown, seq.length); shown = seq.length;
+    render(computing && seq.length ? [seq.length - 1, 1, 0.25] : null);   // после расчёта — без подсветки
+  } else if (playing) {
+    const u = Math.max(0, (performance.now() - playStart) / (S.dur * 1000)), x = linesAt(u), n = Math.floor(x);
+    drawLines(shown, Math.min(n, seq.length)); shown = Math.min(n, seq.length);
+    if (u < 1) {
+      // скорость в линиях за кадр: медленно — нить видно, как она тянется; быстро — подсветка гаснет
+      const rate = (linesAt(u + 1 / 60 / S.dur) - x);
+      render([n, x - n, rate < 1 ? 0.6 : Math.max(0.1, 0.6 / rate)]);
+      // итог расчёта виден всё время — счётчик показа идёт с нуля, потому что портрет натягивается заново
+      status(`Портрет готов: ${seq.length} линий. ${rec ? 'Запись клипа' : 'Показ'} — натягиваю заново с пустых пяльцев: ${shown} из ${seq.length}`);
+    } else {
+      render();
+      if (!holdUntil) holdUntil = now + 2000;                 // пару секунд держим готовую картину
+      if (now > holdUntil) { playing = false; if (rec) stopRec(); else status(`Показ окончен: ${seq.length} из ${seq.length} линий`); updateButtons(); }
+    }
+  }
+  if (rec) copyRec();
+  if (!TEST) requestAnimationFrame(frame);
+}
+
+// ---------- запись клипа ----------
+let rec = null;
+function pickMime() {
+  return ['video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm']
+    .find(m => window.MediaRecorder && MediaRecorder.isTypeSupported(m));
+}
+let recCv = null;
+function copyRec() {
+  if (!recCv) return;
+  const m = D / 0.9, g = recCv.getContext('2d');
+  g.fillStyle = '#121116'; g.fillRect(0, 0, recCv.width, recCv.height);
+  g.drawImage(cv, X0 + D / 2 - m / 2, Y0 + D / 2 - m / 2, m, m, 0, 0, recCv.width, recCv.height);
+}
+function startRec() {
+  const mime = pickMime();
+  if (!mime) { status('Браузер не умеет записывать видео (нужен Chrome/Edge)'); return; }
+  if (!startPlay()) return;
+  const chunks = [];
+  // в режиме «Окно» пишем только квадрат вокруг пяльцев — без пустого места под панелью
+  recCv = null;
+  if (S.frame === 'window') {
+    const side = Math.min(1440, Math.round(D / 0.9 / 2) * 2);
+    recCv = document.createElement('canvas'); recCv.width = recCv.height = side; copyRec();
+  }
+  rec = new MediaRecorder((recCv || cv).captureStream(60), { mimeType: mime, videoBitsPerSecond: 16e6 });
+  rec.ondataavailable = e => e.data.size && chunks.push(e.data);
+  rec.onstop = () => {
+    const ext = mime.startsWith('video/mp4') ? 'mp4' : 'webm';
+    download(new Blob(chunks, { type: mime }), `thread-portrait-${stamp()}.${ext}`);
+    $('btnRec').classList.remove('on'); $('btnRec').textContent = '● Запись';
+    status(`Клип сохранён в «Загрузки» (${ext}). В портрете ${seq.length} линий`);
+    rec = null;
+  };
+  rec.start(250);
+  $('btnRec').classList.add('on'); $('btnRec').textContent = '■ Стоп';
+}
+function stopRec() {
+  if (rec && rec.state !== 'inactive') rec.stop();
+  else { $('btnRec').classList.remove('on'); $('btnRec').textContent = '● Запись'; }
+  playing = false;
+}
+
+// ---------- прочее ----------
+function stamp() { return new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-'); }
+function download(blob, name) {
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+const hex = c => '#' + c.map(v => Math.round(v * 255).toString(16).padStart(2, '0')).join('');
+function scheme() {
+  if (!computeDone) { status('Подождите, расчёт ещё идёт…'); return; }
+  const lines = [
+    'Нитяной портрет — схема натяжения',
+    `Рамка: ${S.shape === 'circle' ? 'круг' : 'квадрат'}, гвоздей: ${S.nails} (№1 — верхний, далее по часовой стрелке)`,
+    `Фон: ${hex(bg)}. Нити: ${palette.map((c, i) => `${i + 1} = ${hex(c)}`).join(', ')}`,
+    `Всего линий: ${seq.length}. Нить идёт непрерывно: от каждого гвоздя к следующему в списке.`,
+  ];
+  if (S.shape === 'circle') lines.push('', 'Гвозди стоят чуть неровно (так нет колец-муара). Угол каждого от верха по часовой, градусы:',
+    nailJit.map((v, i) => `${i + 1}: ${((i + v) / S.nails * 360).toFixed(2)}`).join('  '));
+  if (seq.some(x => x[3])) lines.push('', 'Где указано «середина #цвет» — середину этого отрезка нити подкрасить этим цветом, плавно сходя на нет к обоим гвоздям.');
+  seq.forEach(([a, b, c, t], i) => {
+    const li = layerStarts.indexOf(i);
+    if (li >= 0) lines.push('', layers.length > 1 ? `Слой ${li + 1}: нити ${layers[li].map(k => k + 1).join(' и ')} — старт с гвоздя ${a + 1}` : `Старт: гвоздь ${a + 1}`);
+    lines.push(`${i + 1}. → ${b + 1}${palette.length > 1 ? `  (нить ${c + 1})` : ''}${t ? `  середина ${hex(t)}` : ''}`);
+  });
+  download(new Blob([lines.join('\r\n')], { type: 'text/plain;charset=utf-8' }), `thread-portrait-scheme-${stamp()}.txt`);
+}
+
+$('btnStart').onclick = toggleStart;
+// Заново: рассчитано — показ с начала, иначе расчёт с начала
+$('btnAgain').onclick = () => { if (rec) return; if (computeDone) startPlay(); else startCompute(); };
+addEventListener('keydown', e => { if (e.code === 'Space' && $('crop').hidden && e.target.tagName !== 'BUTTON') { e.preventDefault(); toggleStart(); } });
+$('btnRec').onclick = () => {
+  if (rec || pendingRec) { pendingRec = false; stopRec(); updateButtons(); return; }
+  if (computeDone) { startRec(); return; }
+  // ещё не рассчитано: сначала расчёт, запись начнётся сама
+  pendingRec = true; startCompute();
+  $('btnRec').classList.add('on'); $('btnRec').textContent = '■ Стоп';
+};
+$('btnPng').onclick = () => cv.toBlob(b => download(b, `thread-portrait-${stamp()}.png`));
+$('btnScheme').onclick = scheme;
+for (const id of ['contrast', 'detail', 'threads', 'shape', 'nails', 'lines', 'alpha', 'res', 'chaos', 'tint'])
+  $(id).addEventListener('change', () => invalidate());
+for (const id of ['frame', 'dur', 'ease']) $(id).addEventListener('input', () => { readS(); if (id === 'frame') layout(); });
+// порядок показа меняется сразу, без нового расчёта
+$('center').addEventListener('change', () => {
+  readS(); if (!computeDone) return;
+  buildOrder(); resetBase(); drawLines(0, shown); render();
+  status(`Порядок показа изменён — «▶ Старт» покажет, как нити натягиваются в новом порядке`);
+});
+// текстура — только как нить нарисована: перерисовываем уже натянутое, расчёт не нужен
+$('texture').addEventListener('change', () => { readS(); if (R) { resetBase(); drawLines(0, shown); render(); } });
+addEventListener('resize', () => { if (!TEST) { resetView(); layout(); } });
+addEventListener('keydown', e => { if (!$('crop').hidden) return; if (e.key === 'h' || e.key === 'H' || e.key === 'р' || e.key === 'Р') setPanel($('panel').classList.contains('hidden')); });
+
+// ---------- окно: панель, во всё окно, на весь монитор ----------
+function setPanel(show, big = false) {
+  $('panel').classList.toggle('hidden', !show); document.body.classList.toggle('nopanel', !show);
+  bigView = !show && big; resetView(); layout();
+}
+$('btnHide').onclick = () => setPanel(false);
+$('btnBig').onclick = () => setPanel(false, true);
+$('showPanel').onclick = () => setPanel(true);
+$('btnFull').onclick = () => document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+
+// масштаб страницы браузером (Ctrl+колёсико, Ctrl +/−) запрещён — колёсиком приближается сама картина
+addEventListener('wheel', e => { if (e.ctrlKey) e.preventDefault(); }, { passive: false });
+addEventListener('keydown', e => { if (e.ctrlKey && ['+', '=', '-', '_', '0'].includes(e.key)) e.preventDefault(); });
+// приближение картины: колёсико — к точке под курсором, перетаскивание — сдвиг, двойной щелчок — как было.
+// В клип и PNG это не попадает: двигается только изображение на экране
+let view = { k: 1, x: 0, y: 0 }, viewDrag = null;
+function applyView() {
+  cv.style.transform = view.k === 1 ? '' : `translate(${view.x}px,${view.y}px) scale(${view.k})`;
+  cv.classList.toggle('zoomed', view.k > 1);
+}
+function resetView() { view = { k: 1, x: 0, y: 0 }; applyView(); }
+cv.addEventListener('wheel', e => {
+  e.preventDefault();
+  const r = cv.getBoundingClientRect(), L = r.left - view.x, T = r.top - view.y;   // положение холста без сдвига
+  const k = Math.min(10, Math.max(1, view.k * (e.deltaY < 0 ? 1.15 : 1 / 1.15)));
+  const ux = (e.clientX - L - view.x) / view.k, uy = (e.clientY - T - view.y) / view.k;
+  view = k === 1 ? { k: 1, x: 0, y: 0 } : { k, x: e.clientX - L - k * ux, y: e.clientY - T - k * uy };
+  applyView();
+}, { passive: false });
+cv.addEventListener('pointerdown', e => { if (view.k > 1) { viewDrag = [e.clientX, e.clientY]; cv.setPointerCapture(e.pointerId); cv.classList.add('drag'); } });
+cv.addEventListener('pointermove', e => {
+  if (!viewDrag) return;
+  view.x += e.clientX - viewDrag[0]; view.y += e.clientY - viewDrag[1]; viewDrag = [e.clientX, e.clientY]; applyView();
+});
+cv.addEventListener('pointerup', () => { viewDrag = null; cv.classList.remove('drag'); });
+cv.addEventListener('dblclick', resetView);
+
+// ---------- числовое поле рядом с каждым ползунком ----------
+// ввод числа (Enter или уход из поля) работает так же, как отпускание ползунка
+const numOf = new Map();
+function syncNum(r) { const n = numOf.get(r); if (n && document.activeElement !== n) n.value = Math.round(+r.value); }
+for (const r of document.querySelectorAll('input[type=range]:not([hidden])')) {
+  const n = document.createElement('input');
+  n.type = 'number'; n.className = 'num'; n.min = r.min; n.max = r.max; n.step = r.step || 1; n.value = r.value;
+  const box = document.createElement('span'); box.className = 'rng';
+  r.replaceWith(box); box.append(r, n);
+  numOf.set(r, n);
+  r.addEventListener('input', () => syncNum(r));
+  n.addEventListener('change', () => {
+    const v = Math.min(+r.max, Math.max(+r.min, +n.value || +r.min));
+    n.value = v; r.value = v;
+    r.dispatchEvent(new Event('input')); r.dispatchEvent(new Event('change'));
+  });
+  n.addEventListener('keydown', e => { if (e.key === 'Enter') n.blur(); e.stopPropagation(); });
+}
+
+drawGallery(); drawPresets();
+
+// ---------- запуск ----------
+function begin(img, name) {
+  src = img; srcName = name; drawGallery(); invalidate(name + ' — нажмите «▶ Старт»');
+  if (!TEST) { requestAnimationFrame(frame); return; }
+  startCompute();
+  // тест: всё синхронно; u — момент клипа (0..1), иначе готовая картина
+  while (stepOnce());
+  finishCompute();
+  const n = hp.has('u') ? Math.floor(linesAt(+hp.get('u'))) : seq.length;
+  resetBase(); drawLines(0, n); shown = n; render();
+}
+if (hp.has('img')) { const im = new Image(); im.onload = () => begin(im, 'Фото'); im.src = hp.get('img'); }
+else loadDemo((im, ex) => { srcKey = ex.key; begin(im, ex.name); });
+</script>
+</body>
+</html>
