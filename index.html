@@ -109,7 +109,7 @@
   </select></label>
 
   <h2>Порядок заполнения</h2>
-  <label>Сначала хаос <input type="range" id="chaos" min="0" max="100" value="60"></label>
+  <input type="range" id="chaos" min="0" max="100" value="40" hidden>
   <label title="Только порядок, в котором нити натягиваются в клипе: сначала черты лица, потом крупные формы, края — в конце. На готовую картину не влияет, нового расчёта не нужно. 0 — в порядке расчёта">От лица к краям <input type="range" id="center" min="0" max="100" value="70"></label>
 
   <h2>Клип</h2>
@@ -133,7 +133,7 @@
   <div id="status"></div>
   <div class="hint">
     Программа натягивает нить от гвоздя к гвоздю и каждый раз выбирает линию, которая сильнее всего приближает рисунок к фото.
-    «Сначала хаос» — первые линии считаются по размытому фото: паутина заполняет крупные пятна, потом проступают формы и детали.
+    Первые линии считаются по размытому фото («хаос»): паутина заполняет крупные пятна, потом проступают формы и детали.
     Клавиша H — скрыть панель. Фото можно перетащить в окно.
   </div>
 </div>
@@ -314,7 +314,7 @@ $('btnSavePhoto').onclick = () => {
 };
 
 // ---------- мои настройки: именованные наборы (без кадрирования — оно своё у каждого фото) ----------
-const PRESET_IDS = IDS.filter(id => !['zoom', 'ox', 'oy', 'contrast', 'detail'].includes(id));
+const PRESET_IDS = IDS.filter(id => !['zoom', 'ox', 'oy', 'contrast', 'detail', 'chaos'].includes(id));
 function setVal(id, v) { const el = $(id); el.value = v; syncNum(el); }
 function drawPresets(sel) {
   const ps = lsGet(LS_PRESETS, {}), el = $('presetSel');
