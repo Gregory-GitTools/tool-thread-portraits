@@ -396,7 +396,7 @@ function autoSettings() {
 $('btnAuto').onclick = autoSettings;
 
 // ---------- подготовка: фото → цель, гвозди, палитра ----------
-let R, T, palQ, Pen, PenE, eraser, Wt, RK, nailJit, bg, palette, nailXY, nailSide, phases, layers, pixCache;
+let R, T, palQ, Pen, PenE, WtE, eraser, Wt, RK, nailJit, bg, palette, nailXY, nailSide, phases, layers, pixCache;
 function boxBlur(a, w, h, r) {
   const tmp = new Float32Array(a.length), out = new Float32Array(a.length), k = 1 / (2 * r + 1);
   for (let y = 0; y < h; y++) {
@@ -618,6 +618,16 @@ function prepare() {
   const PE = 8;
   PenE = new Float32Array(n);
   for (let i = 0; i < n; i++) PenE[i] = 1 + PE * face[i];
+  // фон не надо вычищать до чистого цвета: нити, пересекающие фон, и есть текстура. Ластик там почти
+  // ничего не выигрывает — иначе он заливает фон плотной сеткой и прячет нити (и тратит на это тысячи линий)
+  let bgM = new Float32Array(n);
+  for (let i = 0; i < n; i++) if (inside(i)) {
+    let dv = 0; for (let ch = 0; ch < 3; ch++) dv = Math.max(dv, Math.abs(T[i * 3 + ch] - bg[ch]));
+    bgM[i] = Math.min(1, Math.max(0, (0.3 - dv) / 0.15)) * (1 - face[i]);
+  }
+  for (let k = 0; k < 2; k++) bgM = boxBlur(bgM, R, R, Math.max(1, Math.round(R * 0.01)));
+  WtE = new Float32Array(n);
+  for (let i = 0; i < n; i++) WtE[i] = Wt[i] * (1 - 0.9 * bgM[i]);
   // хаос — только вокруг лица: на лице с первых нитей цель чёткая, иначе размытые пятна заливают глаза светом,
   // и потом их уже не вернуть
   for (const ph of phases) if (ph.T !== T) for (let i = 0; i < n; i++) {
@@ -735,7 +745,7 @@ function stepOnce() {
       for (let ch = 0; ch < 3; ch++) { SwD[ch] += ww * (Tp[i3 + ch] - cur[i3 + ch]); Swp[ch] += ww * cur[i3 + ch]; }
     }
     for (const c of colors) {
-      const [cr, cg, cb] = palQ[c], PP = c === eraser ? PenE : Pen;
+      const [cr, cg, cb] = palQ[c], PP = c === eraser ? PenE : Pen, WP = c === eraser ? WtE : Wt;
       let g = 0;
       // выигрыш = насколько уменьшится ошибка, если нить ляжет полупрозрачно поверх текущего рисунка
       for (let q = 0; q < L; q += st) {
@@ -743,7 +753,7 @@ function stepOnce() {
         let p = cur[i3], dd = (cr - p) * a, gq = dd * (2 * (Tp[i3] - p) - dd);
         p = cur[i3 + 1]; dd = (cg - p) * a; gq += dd * (2 * (Tp[i3 + 1] - p) - dd);
         p = cur[i3 + 2]; dd = (cb - p) * a; gq += dd * (2 * (Tp[i3 + 2] - p) - dd);
-        g += gq < 0 ? gq * Wt[pix[q]] * PP[pix[q]] : gq * Wt[pix[q]];
+        g += gq < 0 ? gq * Wt[pix[q]] * PP[pix[q]] : gq * WP[pix[q]];
       }
       const tg = tint ? tintGain(palQ[c], a, Sw, Sww, SwD, Swp) : null;
       const sc = (g + (tg ? tg[0] : 0)) * norm;
