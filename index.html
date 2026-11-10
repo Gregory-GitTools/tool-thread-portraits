@@ -348,20 +348,23 @@ function autoSettings() {
   const c = document.createElement('canvas'); c.width = w; c.height = h;
   const g = c.getContext('2d'); g.drawImage(src, 0, 0, w, h);
   const d = g.getImageData(0, 0, w, h).data;
-  // лицо — по цвету кожи (то же правило, что и в расчёте); берём 10–90 % кожи, чтобы отдельные пятна не растягивали кадр
-  const xs = [], ys = [];
+  // лицо — по цвету кожи (то же правило, что и в расчёте)
+  const pts = [];
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
     const i = (y * w + x) * 4, r = d[i] / 255, gg = d[i + 1] / 255, b = d[i + 2] / 255;
-    if (r > 0.3 && r - gg > 0.04 && gg - b > -0.02 && r - b > 0.1 && r - gg > (gg - b) * 0.8) { xs.push(x); ys.push(y); }
+    if (r > 0.3 && r - gg > 0.04 && gg - b > -0.02 && r - b > 0.1 && r - gg > (gg - b) * 0.8) pts.push([x, y]);
   }
-  const face = xs.length > w * h * 0.01;
+  const face = pts.length > w * h * 0.01;
   let zoom = 100, ox = 0, oy = 0;
   if (face) {
-    xs.sort((a, b) => a - b); ys.sort((a, b) => a - b);
-    const q = (a, f) => a[Math.floor(a.length * f)];
-    const x0 = q(xs, 0.1), x1 = q(xs, 0.9), y0 = q(ys, 0.1), y1 = q(ys, 0.9);
+    const q = (a, f) => a[Math.floor(a.length * f)], ys = pts.map(p => p[1]).sort((a, b) => a - b);
+    // кожа сверху вниз: лоб, лицо, а дальше могут быть шея и грудь — они тянули кадр вниз.
+    // Поэтому ширину лица меряем по верхней части кожи, а высоту лица считаем от ширины
+    const yT = q(ys, 0.03), yB = q(ys, 0.97);
+    const xs = pts.filter(p => p[1] < yT + (yB - yT) * 0.35).map(p => p[0]).sort((a, b) => a - b);
+    const x0 = q(xs, 0.05), x1 = q(xs, 0.95), fh = Math.min(yB - yT, (x1 - x0) * 1.5);
     // голова с частью волос получается лучше, чем лицо вплотную — берём с запасом и чуть выше
-    const side = Math.max(x1 - x0, y1 - y0) * 2.4, cx = (x0 + x1) / 2, cy = (y0 + y1) / 2 - (y1 - y0) * 0.08;
+    const side = fh * 2.6, cx = (x0 + x1) / 2, cy = yT + fh * 0.35;
     zoom = Math.round(Math.min(400, Math.max(100, Math.min(w, h) / side * 100)));
     ox = Math.round((cx / (w / 2) - 1) * 100); oy = Math.round((cy / (h / 2) - 1) * 100);
   }
@@ -375,8 +378,15 @@ function autoSettings() {
     lums.push(l); satS += Math.max(r, gg, b) - Math.min(r, gg, b);
   }
   lums.sort((a, b) => a - b);
-  // тёмный фон — если хотя бы треть круга тёмная (у Вермеера — фон; на светлом фото тёмные только волосы)
-  const darkBg = lums[Math.floor(lums.length * 0.3)] < 0.23, colorful = satS / Math.max(1, lums.length) > 0.06;
+  // фон — по краю самого фото (верх и бока, низ — обычно одежда): по кругу не понять,
+  // в тесный кадр попадают тёмные волосы, и белый фон принимался за тёмный
+  const bl = [];
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    if (y > h * 0.6 || (y > 2 && x > 2 && x < w - 3)) continue;
+    const i = (y * w + x) * 4; bl.push((0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]) / 255);
+  }
+  bl.sort((a, b) => a - b);
+  const darkBg = bl[Math.floor(bl.length / 2)] < 0.4, colorful = satS / Math.max(1, lums.length) > 0.06;
   setVal('threads', colorful ? (darkBg ? 'color-dark' : 'color-light') : (darkBg ? 'mono-light' : 'mono-dark'));
   setVal('nails', 400); setVal('lines', 30000); setVal('alpha', 25);
   setVal('tint', colorful ? 60 : 0); setVal('res', 520); setVal('chaos', 40); setVal('center', face ? 75 : 30);
