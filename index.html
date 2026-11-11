@@ -422,9 +422,22 @@ function hull(p) {
   for (const q of p.reverse()) { while (up.length > 1 && cr(up[up.length - 2], up[up.length - 1], q) <= 0) up.pop(); up.push(q); }
   return lo.slice(0, -1).concat(up.slice(0, -1));
 }
+// MediaPipe изредка сбоит сам по себе: модель падает при первом запуске («Calculator::Open() failed») или не находит
+// лицо, которое со второй попытки находит. Поэтому при сбое модели создаются заново и всё повторяется ещё раз
 async function aiAnalyze(img) {
+  // (и сеть: файл нейросети ~15 МБ иногда не скачивается) — до трёх попыток, с паузой 1 и 3 секунды
+  for (let t = 0; ; t++) {
+    try { return await aiAnalyzeOnce(img, 1024); }
+    catch (e) {
+      if (t >= 2) throw e;
+      console.warn('нейросеть: повтор после сбоя', e); aiReady = null;
+      await new Promise(r => setTimeout(r, t ? 3000 : 1000));
+    }
+  }
+}
+async function aiAnalyzeOnce(img, M) {
   const { v, fl, sg } = await aiLoad();
-  const k = Math.min(1, 1024 / Math.max(img.width, img.height)), w = Math.round(img.width * k), h = Math.round(img.height * k);
+  const k = Math.min(1, M / Math.max(img.width, img.height)), w = Math.round(img.width * k), h = Math.round(img.height * k);
   const c = document.createElement('canvas'); c.width = w; c.height = h; c.getContext('2d').drawImage(img, 0, 0, w, h);
   // маска: R — кожа лица, G — волосы, B — фон
   const sr = sg.segment(c), cm = sr.categoryMask, cat = cm.getAsUint8Array(), mw = cm.width, mh = cm.height;
@@ -437,7 +450,13 @@ async function aiAnalyze(img) {
   // черты лица: яркость — насколько черта важна
   const feat = document.createElement('canvas'); feat.width = w; feat.height = h;
   const fg = feat.getContext('2d'); fg.fillStyle = '#000'; fg.fillRect(0, 0, w, h);
-  const lm = fl.detect(c).faceLandmarks[0];
+  // лица нет — ещё раз на другом масштабе (бывает, что со второго раза находится)
+  let lm = fl.detect(c).faceLandmarks[0];
+  if (!lm) {
+    const c2 = document.createElement('canvas'), k2 = Math.min(1, 640 / Math.max(w, h));
+    c2.width = Math.round(w * k2); c2.height = Math.round(h * k2); c2.getContext('2d').drawImage(c, 0, 0, c2.width, c2.height);
+    lm = fl.detect(c2).faceLandmarks[0] || fl.detect(c).faceLandmarks[0];   // точки нормированы (0..1) — масштаб не важен
+  }
   if (lm) {
     const F = v.FaceLandmarker, ids = con => [...new Set(con.flatMap(e => [e.start, e.end]))];
     const parts = [
@@ -456,7 +475,7 @@ async function aiAnalyze(img) {
 }
 // распознавание запускается сразу при выборе фото; расчёт («▶ Старт») его дожидается.
 // Без интернета или при ошибке — лицо, как раньше, по цвету кожи
-let aiBusy = null;
+let aiBusy = null, aiErr = '';
 function aiStart(img) {
   aiMasks = null;
   if (!OPT.ai) { $('bgcut').disabled = true; return; }
@@ -465,7 +484,7 @@ function aiStart(img) {
     if (src !== img) return;
     aiMasks = m;
     if (!computing && !computeDone) invalidate(m.face ? 'Лицо распознано — нажмите «▶ Старт»' : 'Лица на фото не нашёл — нажмите «▶ Старт»');
-  }).catch(e => { console.warn('нейросеть не загрузилась', e); if (src === img) status('Нейросеть не загрузилась (нет интернета?) — лицо ищу по цвету кожи'); })
+  }).catch(e => { aiErr = String(e && (e.message || e)).slice(0, 200); console.warn('нейросеть не загрузилась', e); if (src === img) status('Нейросеть не загрузилась (нет интернета?) — лицо ищу по цвету кожи'); })
     .finally(() => {
       if (aiBusy !== p) return;
       aiBusy = null;
@@ -487,7 +506,7 @@ function aiCrop(sx, sy, side) {
 }
 
 // ---------- подготовка: фото → цель, гвозди, палитра ----------
-let T0, faceM, R, T, palQ, Pen, PenE, WtE, eraser, Wt, RK, nailJit, bg, palette, nailXY, nailSide, phases, layers, pixCache;
+let T0, faceM, eyeM = null, R, T, palQ, Pen, PenE, WtE, eraser, Wt, RK, nailJit, bg, palette, nailXY, nailSide, phases, layers, pixCache;
 function boxBlur(a, w, h, r) {
   const tmp = new Float32Array(a.length), out = new Float32Array(a.length), k = 1 / (2 * r + 1);
   for (let y = 0; y < h; y++) {
@@ -618,6 +637,7 @@ function prepare() {
   }
   // нейросеть: маски кожи лица, волос, фона и черт лица под этот кадр
   const AI = OPT.ai ? aiCrop(sx, sy, side) : null;
+  eyeM = AI ? AI[3] : null;   // глаза и радужки (1), губы (0.9)… — для замера
   if (AI && S.bgcut === 'cut') {
     // фон убрать: где фон — цвет пустых пялец, на границе плавный переход
     const bgc = S.threads === 'mono-dark' || S.threads === 'color-light' ? 1 : 0;
@@ -632,7 +652,8 @@ function prepare() {
   else if (S.threads === 'mono-light') { bg = BK; palette = [WH, BK]; }
   else { bg = S.threads === 'color-light' ? WH : BK; palette = [BK, WH, ...mainColors(4)]; }   // чёрная и белая есть всегда — ими проще всего лепить светотень
   // лёгкая резкость: границы век, губ, ноздрей контрастнее — нити их не размывают
-  { const Bl = blurRGB(T, Math.max(2, Math.round(R * 0.015))); for (let i = 0; i < T.length; i++) T[i] = Math.min(1, Math.max(0, 2 * T[i] - Bl[i])); }
+  const SH = +(hp.get('sharp') || 1);
+  { const Bl = blurRGB(T, Math.max(2, Math.round(R * 0.015))); for (let i = 0; i < T.length; i++) T[i] = Math.min(1, Math.max(0, T[i] + SH * (T[i] - Bl[i]))); }
   for (let i = 0; i < n; i++) if (!inside(i)) T.set(bg, i * 3);
 
   // гвозди: по окружности или по периметру квадрата, нумерация с верхней точки по часовой стрелке
@@ -723,7 +744,7 @@ function prepare() {
   for (let i = 0; i < n; i++) P[i] = face[i] + 6 * fz[i] / (mz || 1) + ed[i] * 0.3;
   // на лице ошибка «дороже»: иначе нить через глаз не окупается и лицо выходит пустым светлым пятном.
   // Но вся кожа (и лоб под прядями) — лишь немного, главное — черты: светлые нити обходят зрачки стороной
-  const FB = 1, FE = 12;
+  const FB = 1, FE = +(hp.get('fe') || 12);
   for (let i = 0; i < n; i++) Wt[i] *= 1 + FB * face[i] + FE * ft[i];
   // а испортить лицо — ещё дороже: длинная нить, которая затемняет кожу между глазами, потом ничем не спрячется.
   // Поэтому зрачки, уголки глаз и губы собираются косыми нитями, которые быстро уходят с лица
@@ -732,7 +753,7 @@ function prepare() {
   for (let i = 0; i < n; i++) Pen[i] = 1 + PN * face[i];
   // нить цвета фона — «ластик». В конце расчёта она затемняет пересвеченные края и фон, но длинная
   // чёрная хорда через лицо его портит, поэтому ластику испортить лицо гораздо дороже
-  const PE = 8;
+  const PE = +(hp.get('pe') || 8);
   PenE = new Float32Array(n);
   for (let i = 0; i < n; i++) PenE[i] = 1 + PE * face[i];
   // фон не надо вычищать до чистого цвета: нити, пересекающие фон, и есть текстура. Ластик там почти
@@ -744,7 +765,13 @@ function prepare() {
   }
   for (let k = 0; k < 2; k++) bgM = boxBlur(bgM, R, R, Math.max(1, Math.round(R * 0.01)));
   WtE = new Float32Array(n);
-  for (let i = 0; i < n; i++) WtE[i] = Wt[i] * (1 - 0.4 * bgM[i]);   // 0.9 оставлял фон серым, и тёмные фото (лицо на чёрном) теряли контраст
+  // «ластик» — нить цвета фона. На белом фоне это белая нить поверх чёрных: нити мутнеют, «растворяются» —
+  // там его нет, и расчёт останавливается, когда новые нити почти ничего не дают (иначе добивает мелкими
+  // поправками до предела). На чёрном фоне чёрный ластик, наоборот, держит фон тёмным — без него фон зарастает
+  const white = bg[0] === 1;
+  const EG = +(hp.get('eg') ?? (white ? 0 : 1));
+  stopK = +(hp.get('stop') ?? (white ? 0.03 : 0));
+  for (let i = 0; i < n; i++) WtE[i] = Wt[i] * (1 - 0.4 * bgM[i]) * EG;   // 0.9 оставлял фон серым, и тёмные фото (лицо на чёрном) теряли контраст
   // хаос — только вокруг лица: на лице с первых нитей цель чёткая, иначе размытые пятна заливают глаза светом,
   // и потом их уже не вернуть
   for (const ph of phases) if (ph.T !== T) for (let i = 0; i < n; i++) {
@@ -911,7 +938,8 @@ function placeLine(from, j, c, tcol) {
 // оценки другая нить (метки modAt по пикселям); если легла — пересчитываем и кладём обратно. Выигрыш линии мог
 // и вырасти (соседняя нить перебрала яркость), поэтому раз в FREE_FULL линий все линии оцениваются заново
 const FREE_FULL = +(hp.get('full') || 400);
-let heapS, heapK, heapE, heapN = 0, modAt = null, freeKeys, bestC, bestT, freeSince = 0, freeDirty = true;
+let stopK = 0, freeTop = 0,   // stopK — доля от лучшего выигрыша, ниже которой расчёт заканчивается (задаёт prepare)
+    heapS, heapK, heapE, heapN = 0, modAt = null, freeKeys, bestC, bestT, freeSince = 0, freeDirty = true;
 function hPush(s, k, e) {
   let i = heapN++;
   while (i > 0) { const p = (i - 1) >> 1; if (heapS[p] >= s) break; heapS[i] = heapS[p]; heapK[i] = heapK[p]; heapE[i] = heapE[p]; i = p; }
@@ -932,7 +960,7 @@ function freeInit() {
   for (let a = 0; a < N; a++) for (let b = a + 1; b < N; b++) if (allowed(a, b)) freeKeys.push(a * N + b);
   heapS = new Float64Array(freeKeys.length); heapK = new Int32Array(freeKeys.length); heapE = new Int32Array(freeKeys.length);
   bestC = new Int8Array(N * N); bestT = new Array(N * N);
-  modAt = new Int32Array(R * R).fill(-1); freeDirty = true; heapN = 0;
+  modAt = new Int32Array(R * R).fill(-1); freeDirty = true; heapN = 0; freeTop = 0;
 }
 // выигрыш лучшей нити на линии a–b (лучший цвет запоминается в bestC/bestT)
 function scoreLine(a, b, Tp) {
@@ -986,6 +1014,8 @@ function stepFree() {
     if (ph.T !== T) { phaseIdx++; freeDirty = true; return true; }
     return nextLayer();
   }
+  // нити, что почти ничего не дают, только мутят рисунок — дальше не считаем
+  if (ph.T === T) { freeTop = Math.max(freeTop, picks[0][0]); if (stopK && picks[0][0] < stopK * freeTop) return nextLayer(); }
   // в фазе хаоса — случайная из нескольких лучших; остальные возвращаются в кучу
   const [, k] = picks.splice(Math.floor(rnd() * picks.length), 1)[0];
   for (const [s, k2] of picks) hPush(s, k2, seq.length);
@@ -1354,7 +1384,7 @@ async function begin(img, name) {
   const ms = performance.now() - t0;
   const n = hp.has('u') ? Math.floor(linesAt(+hp.get('u'))) : seq.length;
   resetBase(); drawLines(0, n); shown = n; render();
-  window.BENCH = { lines: seq.length, sec: +(ms / 1000).toFixed(1), ai: aiMasks ? (aiMasks.face ? 'face' : 'noface') : '-', ...benchMetrics() };
+  window.BENCH = { lines: seq.length, sec: +(ms / 1000).toFixed(1), ai: aiMasks ? (aiMasks.face ? 'face' : 'noface') : '- ' + aiErr, erase: Math.round(seq.filter(x => x[2] === eraser).length / Math.max(1, seq.length) * 100), ...benchMetrics() };
 }
 
 // ---------- замер качества (только #test): насколько картина похожа на фото ----------
@@ -1384,7 +1414,10 @@ function benchMetrics() {
       const e = Math.sqrt(((A[i * 3] - ref[i * 3]) ** 2 + (A[i * 3 + 1] - ref[i * 3 + 1]) ** 2 + (A[i * 3 + 2] - ref[i * 3 + 2]) ** 2) / 3);
       for (const [key, w] of [['all', 1], ['face', faceM[i] > 0.5 ? 1 : 0]]) { acc[key][0] += ss * w; acc[key][1] += e * w; acc[key][2] += w; }
     }
-    return { ssim: r3(acc.all[0] / acc.all[2]), err: r3(acc.all[1] / acc.all[2]), faceSsim: r3(acc.face[0] / (acc.face[2] || 1)), faceErr: r3(acc.face[1] / (acc.face[2] || 1)) };
+    // глаза: средняя яркость на картине и на фото (по маске нейросети, только глаза и радужки)
+    let eA = 0, eB = 0, eN = 0;
+    if (eyeM) for (let i = 0; i < n; i++) if (eyeM[i] > 0.95) { eA += la[i]; eB += lb[i]; eN++; }
+    return { eye: eN ? r3(eA / eN) : null, eyeRef: eN ? r3(eB / eN) : null, ssim: r3(acc.all[0] / acc.all[2]), err: r3(acc.all[1] / acc.all[2]), faceSsim: r3(acc.face[0] / (acc.face[2] || 1)), faceErr: r3(acc.face[1] / (acc.face[2] || 1)) };
   };
   return { view: cmp(V), model: cmp(M) };
 }

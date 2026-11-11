@@ -20,6 +20,19 @@ const VARIANTS = {
   freesum: "algo=free&ai=0&norm=sum",      // то же, но выигрыш линии не делится на её длину
   ai: "algo=free&ai=1",                    // + лицо и черты по нейросети (так сейчас на сайте)
   aibg: "algo=free&ai=1&bgcut=cut",        // + фон убран
+  // опыты с глазами: вес черт лица (fe, было 12), цена «ластика» на лице (pe, было 8), резкость фото (sharp, было 1)
+  fe6: "algo=free&ai=1&fe=6",
+  fe24: "algo=free&ai=1&fe=24",
+  pe20: "algo=free&ai=1&pe=20",
+  sharp0: "algo=free&ai=1&sharp=0.0001",
+  sharp05: "algo=free&ai=1&sharp=0.5",
+  // «ластик» — нить цвета фона поверх уже натянутых: делает нити мутными. eg — множитель его выигрыша (было 1)
+  eg05: "algo=free&ai=1&eg=0.5",
+  eg02: "algo=free&ai=1&eg=0.2",
+  eg0: "algo=free&ai=1&eg=0",
+  // остановка: расчёт заканчивается, когда лучшая нить даёт меньше этой доли выигрыша самых сильных нитей
+  eg0s3: "algo=free&ai=1&eg=0&stop=0.03",
+  eg0s6: "algo=free&ai=1&eg=0&stop=0.06",
 };
 // кадр (zoom/ox/oy) подобран вручную под лицо
 const PHOTOS = {
@@ -64,7 +77,7 @@ const pending = new Map(), errors = [];
 ws.onmessage = (m) => {
   const d = JSON.parse(m.data);
   if (pending.has(d.id)) { pending.get(d.id)(d.result ?? {}); pending.delete(d.id); }
-  if (d.method === "Runtime.exceptionThrown") errors.push(d.params.exceptionDetails.exception?.description || d.params.exceptionDetails.text);
+  if (d.method === "Runtime.exceptionThrown") errors.push("EXC " + d.params.exceptionDetails.exception?.description || d.params.exceptionDetails.text);
   if (d.method === "Runtime.consoleAPICalled" && d.params.type === "error") errors.push(d.params.args.map((a) => a.value ?? a.description).join(" "));
 };
 const send = (method, params = {}) => new Promise((r) => { const id = ++nextId; pending.set(id, r); ws.send(JSON.stringify({ id, method, params })); });
@@ -80,14 +93,14 @@ for (const ph of photos) for (const v of variants) {
   await send("Page.navigate", { url: `${base}?r=${Date.now()}#${hash}` });
   const t0 = Date.now();
   let res = null;
-  while (!res && Date.now() - t0 < 15 * 60000 && !errors.length) { await sleep(1000); res = await run("window.BENCH || null"); }
+  while (!res && Date.now() - t0 < 15 * 60000 && !errors.some((e) => e.startsWith("EXC "))) { await sleep(1000); res = await run("window.BENCH || null"); }
   if (!res) { console.log(`${ph}/${v}: ошибка ${errors[0] || "не дождался"}`); continue; }
   savePng(`${ph}-${v}`, await run("document.getElementById('c').toDataURL('image/png')"));
   if (!fs.existsSync(path.join(OUT, `${ph}-photo.png`))) savePng(`${ph}-photo`, await run(`(() => {
     const c = document.createElement('canvas'); c.width = c.height = R; const g = c.getContext('2d'), im = g.createImageData(R, R);
     for (let i = 0; i < R * R; i++) { for (let ch = 0; ch < 3; ch++) im.data[i * 4 + ch] = T0[i * 3 + ch] * 255; im.data[i * 4 + 3] = 255; }
     g.putImageData(im, 0, 0); return c.toDataURL('image/png'); })()`));
-  const row = { photo: ph, variant: v, ai: res.ai, lines: res.lines, sec: res.sec, ...Object.fromEntries(Object.entries(res.view).map(([k, x]) => ["v_" + k, x])) };
+  const row = { photo: ph, variant: v, ai: res.ai, erase: res.erase, lines: res.lines, sec: res.sec, ...Object.fromEntries(Object.entries(res.view).map(([k, x]) => ["v_" + k, x])), m_faceSsim: res.model.faceSsim, m_eye: res.model.eye };
   rows.push(row);
   console.log(JSON.stringify(row));
 }
