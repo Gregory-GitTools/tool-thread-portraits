@@ -80,6 +80,10 @@
   <input type="range" id="oy" min="-100" max="100" value="0" hidden>
   <input type="range" id="contrast" min="0" max="100" value="0" hidden>
   <input type="range" id="detail" min="0" max="100" value="70" hidden>
+  <label title="Нейросеть отделяет человека от фона. «Убрать» — фон становится цветом пустых пялец, и все нити идут на лицо и фигуру">Фон <select id="bgcut">
+    <option value="keep">Оставить как на фото</option>
+    <option value="cut">Убрать</option>
+  </select></label>
   <canvas id="preview" width="110" height="110" title="Так программа «видит» фото. Щёлкните, чтобы кадрировать" style="cursor:pointer"></canvas>
 
   <h2>Нити и гвозди</h2>
@@ -132,7 +136,8 @@
   </div>
   <div id="status"></div>
   <div class="hint">
-    Программа натягивает нить от гвоздя к гвоздю и каждый раз выбирает линию, которая сильнее всего приближает рисунок к фото.
+    Программа каждый раз выбирает среди всех пар гвоздей линию, которая сильнее всего приближает рисунок к фото.
+    Лицо и фон распознаёт нейросеть прямо в браузере — глаза, губы и брови прорисовываются точнее.
     Первые линии считаются по размытому фото («хаос»): паутина заполняет крупные пятна, потом проступают формы и детали.
     Клавиша H — скрыть панель. Фото можно перетащить в окно.
   </div>
@@ -161,7 +166,7 @@ const decor = document.createElement('canvas'), dctx = decor.getContext('2d');  
 const status = t => { $('status').textContent = t; };
 
 const S = {};
-const IDS = ['zoom', 'ox', 'oy', 'contrast', 'detail', 'threads', 'shape', 'nails', 'lines', 'alpha', 'res', 'chaos', 'center', 'tint', 'texture', 'frame', 'dur', 'ease'];
+const IDS = ['zoom', 'ox', 'oy', 'contrast', 'detail', 'threads', 'shape', 'nails', 'lines', 'alpha', 'res', 'chaos', 'center', 'tint', 'texture', 'frame', 'dur', 'ease', 'bgcut'];
 function readS() {
   for (const id of IDS) { const el = $(id); S[id] = el.type === 'range' || id === 'res' ? +el.value : el.value; }
 }
@@ -170,6 +175,10 @@ function readS() {
 const hp = new URLSearchParams(location.hash.slice(1));
 for (const id of IDS) if (hp.has(id)) $(id).value = hp.get(id);
 const TEST = hp.has('test');
+// варианты расчёта для сравнения (tools/bench.mjs). По умолчанию — лучший по замерам: нить из любой пары гвоздей
+// (algo=free) и лицо по нейросети (ai). algo=chain — старый расчёт «одна нить от гвоздя к гвоздю»; ai=0 — лицо
+// по цвету кожи; norm=sum — выигрыш линии не делить на её длину
+const OPT = { algo: hp.get('algo') || 'free', norm: hp.get('norm') || 'len', ai: hp.get('ai') !== '0' };
 if (hp.has('hide')) { $('panel').classList.add('hidden'); document.body.classList.add('nopanel'); }
 readS();
 
@@ -182,12 +191,12 @@ if (typeof VERMEER_JPG !== 'undefined') EXAMPLES.push({ key: 'vermeer', name: '�
 function loadDemo(cb) {
   const ex = EXAMPLES[0];
   if (!ex) { status('Нажмите «Фото…» и выберите снимок'); return; }
-  if (ex.threads) $('threads').value = ex.threads;
+  if (ex.threads && !hp.has('threads')) $('threads').value = ex.threads;   // в адресе (тест) — своё
   const im = new Image(); im.onload = () => cb(im, ex); im.src = ex.img;
 }
 let srcName = '', srcKey = null;
 function useImage(img, name, ask, crop, key) {
-  src = img; srcName = name; srcKey = key || null;
+  src = img; srcName = name; srcKey = key || null; aiStart(img);
   $('zoom').value = crop ? crop.zoom : 100; $('ox').value = crop ? crop.ox : 0; $('oy').value = crop ? crop.oy : 0;
   invalidate(name + ' — нажмите «▶ Старт»');
   drawGallery();
@@ -249,6 +258,7 @@ $('cropOk').onclick = () => {
   $('crop').hidden = true;
   $('zoom').value = Math.round(cropSt.zoom); $('ox').value = Math.round(cropSt.ox); $('oy').value = Math.round(cropSt.oy);
   invalidate();
+  savePhoto(true);   // кадрированное фото само попадает в примеры (или обновляет там своё кадрирование)
 };
 $('btnCrop').onclick = openCrop;
 $('preview').onclick = openCrop;
@@ -280,7 +290,7 @@ function drawGallery() {
   for (const p of lsGet(LS_PHOTOS, [])) items.push({ ...p, key: p.id, own: true });
   for (const it of items) {
     const t = document.createElement('div');
-    t.className = 'tile' + (it.key === srcKey ? ' on' : ''); t.title = it.name; t.style.backgroundImage = `url(${it.img})`;
+    t.className = 'tile' + (it.key === srcKey ? ' on' : ''); t.title = it.name; t.style.backgroundImage = `url(${it.thumb || it.img})`;
     t.onclick = () => { const im = new Image(); im.onload = () => useImage(im, it.name, false, it.crop, it.key); im.src = it.img; };
     if (it.own) {
       const x = document.createElement('div'); x.className = 'x'; x.textContent = '×'; x.title = 'Убрать из примеров';
@@ -294,24 +304,33 @@ function drawGallery() {
     g.append(t);
   }
 }
-$('btnSavePhoto').onclick = () => {
+// значок для примеров — то, что попало в рамку (круг или квадрат), а не всё фото
+function cropThumb(crop) {
+  const { side, cx, cy } = cropOf(crop.zoom, crop.ox, crop.oy), c = document.createElement('canvas'); c.width = c.height = 128;
+  c.getContext('2d').drawImage(src, cx - side / 2, cy - side / 2, side, side, 0, 0, 128, 128);
+  return c.toDataURL('image/jpeg', 0.85);
+}
+// в примеры: само фото целиком (уменьшенное — чтобы кадр потом можно было и расширить) + кадрирование + значок по кадру.
+// auto — сохранение после «✂ Кадрировать… → Готово»: встроенные примеры не трогаем, сообщения короче
+function savePhoto(auto) {
   if (!src) return;
   const crop = { zoom: +$('zoom').value, ox: +$('ox').value, oy: +$('oy').value };
   const list = lsGet(LS_PHOTOS, []), old = list.find(p => p.id === srcKey);
-  if (EXAMPLES.some(e => e.key === srcKey)) { status('Это фото и так всегда в примерах'); return; }
-  if (old) old.crop = crop;                                    // уже в примерах — только запоминаем новое кадрирование
+  if (EXAMPLES.some(e => e.key === srcKey)) { if (!auto) status('Это фото и так всегда в примерах'); return; }
+  if (old) { old.crop = crop; old.thumb = cropThumb(crop); }   // уже в примерах — только новое кадрирование
   else {
     // фото уменьшаем (до 1400 точек по длинной стороне), чтобы в браузере поместилось побольше
     const k = Math.min(1, 1400 / Math.max(src.width, src.height)), c = document.createElement('canvas');
     c.width = Math.round(src.width * k); c.height = Math.round(src.height * k);
     c.getContext('2d').drawImage(src, 0, 0, c.width, c.height);
-    list.push({ id: 'p' + Date.now(), name: srcName || 'Фото', img: c.toDataURL('image/jpeg', 0.85), crop });
+    list.push({ id: 'p' + Date.now(), name: srcName || 'Фото', img: c.toDataURL('image/jpeg', 0.85), thumb: cropThumb(crop), crop });
   }
   if (!lsSet(LS_PHOTOS, list)) return;
   if (!old) srcKey = list[list.length - 1].id;
   drawGallery();
-  status(old ? 'Кадрирование этого фото запомнено' : 'Фото сохранено в примеры — оно останется и после перезапуска');
-};
+  status(old ? 'Кадрирование этого фото запомнено в примерах' : 'Кадрированное фото сохранено в примеры — оно останется и после перезапуска');
+}
+$('btnSavePhoto').onclick = () => savePhoto(false);
 
 // ---------- мои настройки: именованные наборы (без кадрирования — оно своё у каждого фото) ----------
 const PRESET_IDS = IDS.filter(id => !['zoom', 'ox', 'oy', 'contrast', 'detail', 'chaos'].includes(id));
@@ -354,7 +373,7 @@ function autoSettings() {
     const i = (y * w + x) * 4, r = d[i] / 255, gg = d[i + 1] / 255, b = d[i + 2] / 255;
     if (r > 0.3 && r - gg > 0.04 && gg - b > -0.02 && r - b > 0.1 && r - gg > (gg - b) * 0.8) pts.push([x, y]);
   }
-  const face = pts.length > w * h * 0.01;
+  const face = aiMasks && aiMasks.src === src ? aiMasks.face : pts.length > w * h * 0.01;
   // кадр не трогаем — его выбирают «✂ Кадрировать…». Что попало в круг: разброс яркости, цветность
   const { side, cx, cy } = cropOf(S.zoom, S.ox, S.oy), sx = cx * k, sy = cy * k, sr = side * k / 2;
   const lums = []; let satS = 0;
@@ -381,8 +400,94 @@ function autoSettings() {
 }
 $('btnAuto').onclick = autoSettings;
 
+// ---------- распознавание лица и фона: нейросети MediaPipe (Google) прямо в браузере, фото никуда не уходит ----------
+// Один раз на фото: маска «фон / волосы / кожа лица» и 478 точек лица (глаза, радужки, губы, брови, нос).
+// Хранится в координатах фото, в prepare() вырезается тем же кадром, что и само фото
+const MP = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.2.2', MPM = 'https://storage.googleapis.com/mediapipe-models';
+let aiReady = null, aiMasks = null;
+function aiLoad() {
+  return aiReady ||= (async () => {
+    const v = await import(MP + '/vision_bundle.mjs'), files = await v.FilesetResolver.forVisionTasks(MP + '/wasm');
+    // строго по очереди: две модели, создаваемые одновременно, зависали навсегда
+    const fl = await v.FaceLandmarker.createFromOptions(files, { baseOptions: { modelAssetPath: MPM + '/face_landmarker/face_landmarker/float16/1/face_landmarker.task' }, runningMode: 'IMAGE', numFaces: 1 });
+    const sg = await v.ImageSegmenter.createFromOptions(files, { baseOptions: { modelAssetPath: MPM + '/image_segmenter/selfie_multiclass_256x256/float32/latest/selfie_multiclass_256x256.tflite' }, runningMode: 'IMAGE', outputCategoryMask: true, outputConfidenceMasks: false });
+    return { v, fl, sg };
+  })().catch(e => { aiReady = null; throw e; });   // сбой сети — со следующим фото попробуем снова
+}
+// выпуклая оболочка точек — контур глаза, губ, брови
+function hull(p) {
+  p = p.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const cr = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]), lo = [], up = [];
+  for (const q of p) { while (lo.length > 1 && cr(lo[lo.length - 2], lo[lo.length - 1], q) <= 0) lo.pop(); lo.push(q); }
+  for (const q of p.reverse()) { while (up.length > 1 && cr(up[up.length - 2], up[up.length - 1], q) <= 0) up.pop(); up.push(q); }
+  return lo.slice(0, -1).concat(up.slice(0, -1));
+}
+async function aiAnalyze(img) {
+  const { v, fl, sg } = await aiLoad();
+  const k = Math.min(1, 1024 / Math.max(img.width, img.height)), w = Math.round(img.width * k), h = Math.round(img.height * k);
+  const c = document.createElement('canvas'); c.width = w; c.height = h; c.getContext('2d').drawImage(img, 0, 0, w, h);
+  // маска: R — кожа лица, G — волосы, B — фон
+  const sr = sg.segment(c), cm = sr.categoryMask, cat = cm.getAsUint8Array(), mw = cm.width, mh = cm.height;
+  const seg = document.createElement('canvas'); seg.width = mw; seg.height = mh;
+  const sgc = seg.getContext('2d'), sd = sgc.createImageData(mw, mh);
+  for (let i = 0; i < mw * mh; i++) {
+    const t = cat[i]; sd.data[i * 4] = t === 3 ? 255 : 0; sd.data[i * 4 + 1] = t === 1 ? 255 : 0; sd.data[i * 4 + 2] = t === 0 ? 255 : 0; sd.data[i * 4 + 3] = 255;
+  }
+  sgc.putImageData(sd, 0, 0); cm.close();
+  // черты лица: яркость — насколько черта важна
+  const feat = document.createElement('canvas'); feat.width = w; feat.height = h;
+  const fg = feat.getContext('2d'); fg.fillStyle = '#000'; fg.fillRect(0, 0, w, h);
+  const lm = fl.detect(c).faceLandmarks[0];
+  if (lm) {
+    const F = v.FaceLandmarker, ids = con => [...new Set(con.flatMap(e => [e.start, e.end]))];
+    const parts = [
+      [F.FACE_LANDMARKS_LEFT_EYE, 1], [F.FACE_LANDMARKS_RIGHT_EYE, 1], [F.FACE_LANDMARKS_LEFT_IRIS, 1], [F.FACE_LANDMARKS_RIGHT_IRIS, 1],
+      [F.FACE_LANDMARKS_LIPS, 0.9], [F.FACE_LANDMARKS_LEFT_EYEBROW, 0.5], [F.FACE_LANDMARKS_RIGHT_EYEBROW, 0.5],
+      [[1, 2, 4, 5, 48, 64, 98, 240, 278, 294, 327, 460, 97, 326].map(i => ({ start: i, end: i })), 0.7],   // кончик носа и ноздри
+    ];
+    fg.globalCompositeOperation = 'lighten';
+    for (const [con, wt] of parts) {
+      const g = Math.round(255 * wt); fg.fillStyle = `rgb(${g},${g},${g})`;
+      const pts = hull(ids(con).map(i => [lm[i].x * w, lm[i].y * h]));
+      fg.beginPath(); pts.forEach(([x, y], j) => j ? fg.lineTo(x, y) : fg.moveTo(x, y)); fg.closePath(); fg.fill();
+    }
+  }
+  return { src: img, seg, feat, face: !!lm };
+}
+// распознавание запускается сразу при выборе фото; расчёт («▶ Старт») его дожидается.
+// Без интернета или при ошибке — лицо, как раньше, по цвету кожи
+let aiBusy = null;
+function aiStart(img) {
+  aiMasks = null;
+  if (!OPT.ai) { $('bgcut').disabled = true; return; }
+  $('bgcut').disabled = true; $('bgcut').title = 'Нейросеть ещё распознаёт фото…';
+  const p = aiBusy = aiAnalyze(img).then(m => {
+    if (src !== img) return;
+    aiMasks = m;
+    if (!computing && !computeDone) invalidate(m.face ? 'Лицо распознано — нажмите «▶ Старт»' : 'Лица на фото не нашёл — нажмите «▶ Старт»');
+  }).catch(e => { console.warn('нейросеть не загрузилась', e); if (src === img) status('Нейросеть не загрузилась (нет интернета?) — лицо ищу по цвету кожи'); })
+    .finally(() => {
+      if (aiBusy !== p) return;
+      aiBusy = null;
+      $('bgcut').disabled = !aiMasks;
+      $('bgcut').title = aiMasks ? 'Нейросеть отделяет человека от фона. «Убрать» — фон становится цветом пустых пялец, и все нити идут на лицо и фигуру' : 'Нужна нейросеть — она не загрузилась';
+    });
+}
+// маски под текущий кадр: [кожа лица, волосы, фон, черты] (0..1) или null
+function aiCrop(sx, sy, side) {
+  if (!aiMasks || aiMasks.src !== src) return null;
+  const out = [];
+  for (const cnv of [aiMasks.seg, aiMasks.feat]) {
+    const k = cnv.width / src.width, oc = document.createElement('canvas'); oc.width = oc.height = R;
+    const g = oc.getContext('2d'); g.imageSmoothingQuality = 'high'; g.drawImage(cnv, sx * k, sy * k, side * k, side * k, 0, 0, R, R);
+    const d = g.getImageData(0, 0, R, R).data, chs = cnv === aiMasks.seg ? 3 : 1;
+    for (let ch = 0; ch < chs; ch++) { const a = new Float32Array(R * R); for (let i = 0; i < R * R; i++) a[i] = d[i * 4 + ch] / 255; out.push(a); }
+  }
+  return out;
+}
+
 // ---------- подготовка: фото → цель, гвозди, палитра ----------
-let R, T, palQ, Pen, PenE, WtE, eraser, Wt, RK, nailJit, bg, palette, nailXY, nailSide, phases, layers, pixCache;
+let T0, faceM, R, T, palQ, Pen, PenE, WtE, eraser, Wt, RK, nailJit, bg, palette, nailXY, nailSide, phases, layers, pixCache;
 function boxBlur(a, w, h, r) {
   const tmp = new Float32Array(a.length), out = new Float32Array(a.length), k = 1 / (2 * r + 1);
   for (let y = 0; y < h; y++) {
@@ -443,7 +548,15 @@ function mainColors(k) {
     .sort((x, y) => y.w - x.w);
   const out = [];
   // сравниваем уже чистые цвета нитей: тёмно- и светло-жёлтый после этого — одна и та же нить
-  for (const o of cand) { const c = pure(o.c, bg); if (out.length < k && out.every(q => d2(q, c) > 0.06)) out.push(c); }
+  // похожесть — по оттенку без учёта яркости: светлоту дают чёрная и белая нити. Раньше на белом фоне тёмная и
+  // светлая охра считались разными нитями и занимали все места — синяя повязка Вермеера выходила серой
+  // (на чёрном фоне pure() и так выравнивает яркость; там сравнение по оттенку уводило среднюю коричневую нить
+  // в пользу второй голубой, и лицо выходило хуже — поэтому только на белом)
+  const hue = c => { if (bg[0] === 0) return c; const m = Math.max(...c, 0.05); return c.map(v => v / m); }, keys = [];
+  for (const o of cand) {
+    const c = pure(o.c, bg), h = hue(c);
+    if (out.length < k && keys.every(q => d2(q, h) > 0.06)) { out.push(c); keys.push(h); }
+  }
   return out;
 }
 const inside = i => {
@@ -503,6 +616,15 @@ function prepare() {
     const L = lev(lum[i]), k = Math.min(1.2, Math.sqrt(L / Math.max(0.02, lum[i])));
     for (let ch = 0; ch < 3; ch++) T[i * 3 + ch] = mono ? L : Math.min(1, Math.max(0, L + (d[i * 4 + ch] / 255 - lum[i]) * k));
   }
+  // нейросеть: маски кожи лица, волос, фона и черт лица под этот кадр
+  const AI = OPT.ai ? aiCrop(sx, sy, side) : null;
+  if (AI && S.bgcut === 'cut') {
+    // фон убрать: где фон — цвет пустых пялец, на границе плавный переход
+    const bgc = S.threads === 'mono-dark' || S.threads === 'color-light' ? 1 : 0;
+    let m = AI[2]; for (let k = 0; k < 2; k++) m = boxBlur(m, R, R, Math.max(1, Math.round(R * 0.004)));
+    for (let i = 0; i < n; i++) for (let ch = 0; ch < 3; ch++) T[i * 3 + ch] += (bgc - T[i * 3 + ch]) * m[i];
+  }
+  T0 = T.slice();   // фото как есть (без резкости) — с ним сравнивает замер качества (#test)
 
   const WH = [1, 1, 1], BK = [0, 0, 0];
   // вторая нить цвета фона «стирает» лишнее: без неё ошибку нельзя исправить, и расчёт рано останавливается
@@ -566,7 +688,8 @@ function prepare() {
   let sk = new Float32Array(n), ed = new Float32Array(n), skN = 0;
   for (let i = 0; i < n; i++) {
     const r = d[i * 4] / 255, g = d[i * 4 + 1] / 255, b = d[i * 4 + 2] / 255;
-    if (inside(i) && r > 0.3 && r - g > 0.04 && g - b > -0.02 && r - b > 0.1 && r - g > (g - b) * 0.8) { sk[i] = 1; skN++; }
+    // лицо — по нейросети (кожа лица + черты), иначе по цвету кожи
+    if (inside(i) && (AI ? AI[0][i] > 0.5 || AI[3][i] > 0.1 : r > 0.3 && r - g > 0.04 && g - b > -0.02 && r - b > 0.1 && r - g > (g - b) * 0.8)) { sk[i] = 1; skN++; }
     ed[i] = Math.min(1, e[i] / e95);
   }
   // главные черты — зрачки, уголки глаз, линия рта, ноздри: небольшие места темнее окружения.
@@ -580,8 +703,14 @@ function prepare() {
   const useSkin = skN > n * 0.01;
   const face = new Float32Array(n);
   for (let i = 0; i < n; i++) face[i] = Math.min(1, (useSkin ? sk[i] : ed[i]) * 1.5);
+  faceM = face;
   const fv = Array.from(ft).filter((v, i) => face[i] > 0.5).sort((a, b) => a - b), f97 = fv[Math.floor(fv.length * 0.97)] || 1;
   for (let i = 0; i < n; i++) ft[i] = Math.min(1, ft[i] / f97) * face[i];
+  // черты по точкам лица: глаза, губы, брови, нос — точно по контуру; тёмные пятна (морщины, тени) — вполсилы
+  if (AI && aiMasks.face) {
+    let fm = AI[3]; for (let k = 0; k < 2; k++) fm = boxBlur(fm, R, R, Math.max(1, Math.round(R * 0.006)));
+    for (let i = 0; i < n; i++) ft[i] = Math.max(ft[i] * 0.5, fm[i]);
+  }
   // контуры вне лица (причёска, одежда, фон) почти не важны — иначе нити уходят на волосы, а лицо портится
   for (let i = 0; i < n; i++) Wt[i] = 1 + (Wt[i] - 1) * (0.25 + 0.75 * face[i]);
   // очередь: сначала глаза и губы (мелкие черты внутри лица), потом остальное лицо, затем повязка/одежда, края
@@ -711,6 +840,7 @@ function tintGain(col, a, Sw, Sww, SwD, Swp) {
 
 // один шаг: от текущего гвоздя перебираем все гвозди и все цвета нити, берём лучшую линию
 function stepOnce() {
+  if (OPT.algo === 'free') return stepFree();
   if (layerIdx >= layers.length) return false;
   let ph = phases[phaseIdx];
   while (ph && seq.length >= layerStart + Math.round(layerCap * ph.until)) ph = phases[++phaseIdx];
@@ -758,27 +888,121 @@ function stepOnce() {
   }
   // в фазе хаоса — случайная из нескольких лучших линий: так получается паутина, а не сразу точный рисунок
   const [, j, c, tcol] = top[Math.floor(rnd() * top.length)];
-  const col = palQ[c], pix = linePix(from, j), L = pix.length;
+  used.add(from < j ? from * N + j : j * N + from);
+  placeLine(from, j, c, tcol);
+  curNail = j;
+  return true;
+}
+// нить ложится на рисунок: полупрозрачно поверх уже натянутого
+function placeLine(from, j, c, tcol) {
+  const col = palQ[c], pix = linePix(from, j), L = pix.length, a = S.alpha / 100, s = seq.length;
   // pix идут от меньшего номера гвоздя к большему — по нему и считаем положение вдоль нити
   const tQ = tcol ? qOf(tcol, 0, new Float32Array(3), 0) : null;
   for (let q = 0; q < L; q++) {
     const i3 = pix[q] * 3, w = tQ ? TW[(q * 256 / (L - 1)) | 0] : 0;
     for (let ch = 0; ch < 3; ch++) cur[i3 + ch] += (col[ch] + (tQ ? (tQ[ch] - col[ch]) * w : 0) - cur[i3 + ch]) * a;
+    if (modAt) modAt[pix[q]] = s;
   }
-  used.add(from < j ? from * N + j : j * N + from);
   seq.push([from, j, c, tcol || null]);
-  curNail = j;
+}
+
+// ---------- вариант «свободный выбор» (#algo=free): лучшая нить среди ВСЕХ пар гвоздей, не только от текущего ----------
+// Ленивый жадный выбор: оценки всех линий лежат в куче. У верхней проверяем, не легла ли поверх неё с момента
+// оценки другая нить (метки modAt по пикселям); если легла — пересчитываем и кладём обратно. Выигрыш линии мог
+// и вырасти (соседняя нить перебрала яркость), поэтому раз в FREE_FULL линий все линии оцениваются заново
+const FREE_FULL = +(hp.get('full') || 400);
+let heapS, heapK, heapE, heapN = 0, modAt = null, freeKeys, bestC, bestT, freeSince = 0, freeDirty = true;
+function hPush(s, k, e) {
+  let i = heapN++;
+  while (i > 0) { const p = (i - 1) >> 1; if (heapS[p] >= s) break; heapS[i] = heapS[p]; heapK[i] = heapK[p]; heapE[i] = heapE[p]; i = p; }
+  heapS[i] = s; heapK[i] = k; heapE[i] = e;
+}
+function hPop() {
+  const s = heapS[--heapN], k = heapK[heapN], e = heapE[heapN]; let i = 0;
+  for (;;) {
+    let c = 2 * i + 1; if (c >= heapN) break;
+    if (c + 1 < heapN && heapS[c + 1] > heapS[c]) c++;
+    if (heapS[c] <= s) break;
+    heapS[i] = heapS[c]; heapK[i] = heapK[c]; heapE[i] = heapE[c]; i = c;
+  }
+  heapS[i] = s; heapK[i] = k; heapE[i] = e;
+}
+function freeInit() {
+  const N = S.nails; freeKeys = [];
+  for (let a = 0; a < N; a++) for (let b = a + 1; b < N; b++) if (allowed(a, b)) freeKeys.push(a * N + b);
+  heapS = new Float64Array(freeKeys.length); heapK = new Int32Array(freeKeys.length); heapE = new Int32Array(freeKeys.length);
+  bestC = new Int8Array(N * N); bestT = new Array(N * N);
+  modAt = new Int32Array(R * R).fill(-1); freeDirty = true; heapN = 0;
+}
+// выигрыш лучшей нити на линии a–b (лучший цвет запоминается в bestC/bestT)
+function scoreLine(a, b, Tp) {
+  const pix = linePix(a, b), L = pix.length, key = a * S.nails + b;
+  if (L < 4) return 0;
+  const al = S.alpha / 100, st = L > 40 ? 2 : 1, norm = st / L, tint = S.tint > 0 && L >= 8;
+  let Sw = 0, Sww = 0; const SwD = [0, 0, 0], Swp = [0, 0, 0];
+  if (tint) for (let q = 0; q < L; q += st) {
+    const i = pix[q], i3 = i * 3, w = TW[(q * 256 / (L - 1)) | 0], ww = Wt[i] * w;
+    Sw += ww; Sww += ww * w;
+    for (let ch = 0; ch < 3; ch++) { SwD[ch] += ww * (Tp[i3 + ch] - cur[i3 + ch]); Swp[ch] += ww * cur[i3 + ch]; }
+  }
+  let best = 0, bc = -1, bt = null;
+  for (const c of layers[layerIdx]) {
+    const [cr, cg, cb] = palQ[c], PP = c === eraser ? PenE : Pen, WP = c === eraser ? WtE : Wt;
+    let g = 0;
+    for (let q = 0; q < L; q += st) {
+      const i3 = pix[q] * 3;
+      let p = cur[i3], dd = (cr - p) * al, gq = dd * (2 * (Tp[i3] - p) - dd);
+      p = cur[i3 + 1]; dd = (cg - p) * al; gq += dd * (2 * (Tp[i3 + 1] - p) - dd);
+      p = cur[i3 + 2]; dd = (cb - p) * al; gq += dd * (2 * (Tp[i3 + 2] - p) - dd);
+      g += gq < 0 ? gq * Wt[pix[q]] * PP[pix[q]] : gq * WP[pix[q]];
+    }
+    const tg = tint ? tintGain(palQ[c], al, Sw, Sww, SwD, Swp) : null;
+    const sc = (g + (tg ? tg[0] : 0)) * (OPT.norm === 'sum' ? 1 : norm);
+    if (sc > best) { best = sc; bc = c; bt = tg && tg[1]; }
+  }
+  bestC[key] = bc; bestT[key] = bt;
+  return best;
+}
+function freeRebuild(Tp) {
+  heapN = 0; const e = seq.length, N = S.nails;
+  for (const k of freeKeys) { const s = scoreLine(k / N | 0, k % N, Tp); if (s > 0) hPush(s, k, e); }
+  freeSince = seq.length; freeDirty = false;
+}
+const freshSince = (k, e) => { const pix = pixCache.get(k); for (let q = 0; q < pix.length; q++) if (modAt[pix[q]] >= e) return false; return true; };
+function stepFree() {
+  if (layerIdx >= layers.length) return false;
+  let ph = phases[phaseIdx];
+  while (ph && seq.length >= layerStart + Math.round(layerCap * ph.until)) { ph = phases[++phaseIdx]; freeDirty = true; }
+  if (!ph) return nextLayer();
+  if (freeDirty || seq.length - freeSince >= FREE_FULL) freeRebuild(ph.Q);
+  const N = S.nails, picks = [];
+  while (heapN && picks.length < ph.topK) {
+    const s = heapS[0], k = heapK[0], e = heapE[0]; hPop();
+    if (e === seq.length || freshSince(k, e)) picks.push([s, k]);
+    else { const s2 = scoreLine(k / N | 0, k % N, ph.Q); if (s2 > 0) hPush(s2, k, seq.length); }
+  }
+  if (!picks.length) {
+    if (seq.length > freeSince) { freeDirty = true; return true; }   // перед остановкой — ещё одна полная оценка
+    if (ph.T !== T) { phaseIdx++; freeDirty = true; return true; }
+    return nextLayer();
+  }
+  // в фазе хаоса — случайная из нескольких лучших; остальные возвращаются в кучу
+  const [, k] = picks.splice(Math.floor(rnd() * picks.length), 1)[0];
+  for (const [s, k2] of picks) hPush(s, k2, seq.length);
+  placeLine(k / N | 0, k % N, bestC[k], bestT[k]);
   return true;
 }
 
 function startCompute() {
   if (!src) return;
+  if (aiBusy) { status('Распознаю лицо и фон…'); const p = aiBusy; p.then(() => { if (!computing && !computeDone) startCompute(); updateButtons(); }); return; }
   stopPlay();
   readS(); prepare();
   seq = []; ord = null; layerStarts = []; layerIdx = 0; curNail = 0; rnd = mulberry32(20190806); startLayer();
   cur = new Float32Array(R * R * 3);
   const bgQ = qOf(bg, 0, new Float32Array(3), 0);
   for (let i = 0; i < R * R; i++) cur.set(bgQ, i * 3);
+  modAt = null; if (OPT.algo === 'free') freeInit();
   setPaused(false);
   computing = true; computeDone = false; shown = 0;
   layout();
@@ -1005,15 +1229,15 @@ function scheme() {
     'Нитяной портрет — схема натяжения',
     `Рамка: ${S.shape === 'circle' ? 'круг' : 'квадрат'}, гвоздей: ${S.nails} (№1 — верхний, далее по часовой стрелке)`,
     `Фон: ${hex(bg)}. Нити: ${palette.map((c, i) => `${i + 1} = ${hex(c)}`).join(', ')}`,
-    `Всего линий: ${seq.length}. Нить идёт непрерывно: от каждого гвоздя к следующему в списке.`,
+    `Всего линий: ${seq.length}. ` + (OPT.algo === 'chain' ? 'Нить идёт непрерывно: от каждого гвоздя к следующему в списке.' : 'Каждая строка — отдельный отрезок нити между двумя гвоздями, по порядку натяжения.'),
   ];
   if (S.shape === 'circle') lines.push('', 'Гвозди стоят чуть неровно (так нет колец-муара). Угол каждого от верха по часовой, градусы:',
     nailJit.map((v, i) => `${i + 1}: ${((i + v) / S.nails * 360).toFixed(2)}`).join('  '));
   if (seq.some(x => x[3])) lines.push('', 'Где указано «середина #цвет» — середину этого отрезка нити подкрасить этим цветом, плавно сходя на нет к обоим гвоздям.');
   seq.forEach(([a, b, c, t], i) => {
     const li = layerStarts.indexOf(i);
-    if (li >= 0) lines.push('', layers.length > 1 ? `Слой ${li + 1}: нити ${layers[li].map(k => k + 1).join(' и ')} — старт с гвоздя ${a + 1}` : `Старт: гвоздь ${a + 1}`);
-    lines.push(`${i + 1}. → ${b + 1}${palette.length > 1 ? `  (нить ${c + 1})` : ''}${t ? `  середина ${hex(t)}` : ''}`);
+    if (li >= 0 && OPT.algo === 'chain') lines.push('', layers.length > 1 ? `Слой ${li + 1}: нити ${layers[li].map(k => k + 1).join(' и ')} — старт с гвоздя ${a + 1}` : `Старт: гвоздь ${a + 1}`);
+    lines.push(`${i + 1}. ${OPT.algo === 'chain' ? '' : a + 1 + ' '}→ ${b + 1}${palette.length > 1 ? `  (нить ${c + 1})` : ''}${t ? `  середина ${hex(t)}` : ''}`);
   });
   download(new Blob([lines.join('\r\n')], { type: 'text/plain;charset=utf-8' }), `thread-portrait-scheme-${stamp()}.txt`);
 }
@@ -1029,9 +1253,22 @@ $('btnRec').onclick = () => {
   pendingRec = true; startCompute();
   $('btnRec').classList.add('on'); $('btnRec').textContent = '■ Стоп';
 };
-$('btnPng').onclick = () => cv.toBlob(b => download(b, `thread-portrait-${stamp()}.png`));
+// PNG — только сам портрет: квадрат точно по рамке, поле вокруг круга — цвета фона картины (не тёмное поле окна),
+// и в своём разрешении, независимо от размера окна и панели. Рисуется заново в том же холсте, потом всё как было
+const PNG_SIZE = 2048;
+$('btnPng').onclick = () => {
+  if (!R) return;
+  base.width = base.height = W = H = D = PNG_SIZE; X0 = Y0 = 0;
+  bctx.globalAlpha = 1; bctx.fillStyle = rgb(bg); bctx.fillRect(0, 0, W, H);
+  drawLines(0, shown);
+  const nr = Math.max(1.2, D * 0.0028);
+  bctx.fillStyle = 'rgba(160,160,160,.55)';
+  for (let i = 0; i < nailXY.length; i++) { const [x, y] = nailPx(i); bctx.beginPath(); bctx.arc(x, y, nr, 0, Math.PI * 2); bctx.fill(); }
+  base.toBlob(b => download(b, `thread-portrait-${stamp()}.png`));   // снимок холста берётся сразу, до layout()
+  layout();
+};
 $('btnScheme').onclick = scheme;
-for (const id of ['contrast', 'detail', 'threads', 'shape', 'nails', 'lines', 'alpha', 'res', 'chaos', 'tint'])
+for (const id of ['contrast', 'detail', 'threads', 'shape', 'nails', 'lines', 'alpha', 'res', 'chaos', 'tint', 'bgcut'])
   $(id).addEventListener('change', () => invalidate());
 for (const id of ['frame', 'dur', 'ease']) $(id).addEventListener('input', () => { readS(); if (id === 'frame') layout(); });
 // порядок показа меняется сразу, без нового расчёта
@@ -1104,15 +1341,52 @@ for (const r of document.querySelectorAll('input[type=range]:not([hidden])')) {
 drawGallery(); drawPresets();
 
 // ---------- запуск ----------
-function begin(img, name) {
-  src = img; srcName = name; drawGallery(); invalidate(name + ' — нажмите «▶ Старт»');
+async function begin(img, name) {
+  src = img; srcName = name;
+  aiStart(img); if (TEST && aiBusy) await aiBusy.catch(() => {});
+  drawGallery(); invalidate(name + ' — нажмите «▶ Старт»');
   if (!TEST) { requestAnimationFrame(frame); return; }
+  const t0 = performance.now();
   startCompute();
   // тест: всё синхронно; u — момент клипа (0..1), иначе готовая картина
   while (stepOnce());
   finishCompute();
+  const ms = performance.now() - t0;
   const n = hp.has('u') ? Math.floor(linesAt(+hp.get('u'))) : seq.length;
   resetBase(); drawLines(0, n); shown = n; render();
+  window.BENCH = { lines: seq.length, sec: +(ms / 1000).toFixed(1), ai: aiMasks ? (aiMasks.face ? 'face' : 'noface') : '-', ...benchMetrics() };
+}
+
+// ---------- замер качества (только #test): насколько картина похожа на фото ----------
+// view — то, что видит зритель (нарисованные нити, уменьшенные до сетки расчёта), model — расчётная картина.
+// Сравнение с фото без резкости, оба слегка размыты (как смотреть с расстояния). ssim — похожесть яркостного
+// рисунка (1 — одинаково), err — средняя ошибка цвета (0..1); face — то же только по лицу
+function benchMetrics() {
+  const n = R * R, oc = document.createElement('canvas'); oc.width = oc.height = R;
+  const g = oc.getContext('2d'); g.imageSmoothingQuality = 'high'; g.drawImage(base, X0, Y0, D, D, 0, 0, R, R);
+  const d = g.getImageData(0, 0, R, R).data, V = new Float32Array(n * 3), M = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) {
+    for (let ch = 0; ch < 3; ch++) V[i * 3 + ch] = d[i * 4 + ch] / 255;
+    M.set(fromQ([cur[i * 3], cur[i * 3 + 1], cur[i * 3 + 2]]), i * 3);
+  }
+  const ref = blurRGB(T0, 1), r3 = x => Math.round(x * 1000) / 1000;
+  const cmp = A => {
+    A = blurRGB(A, 1);
+    const la = new Float32Array(n), lb = new Float32Array(n);
+    for (let i = 0; i < n; i++) { la[i] = 0.299 * A[i * 3] + 0.587 * A[i * 3 + 1] + 0.114 * A[i * 3 + 2]; lb[i] = 0.299 * ref[i * 3] + 0.587 * ref[i * 3 + 1] + 0.114 * ref[i * 3 + 2]; }
+    const bb = x => boxBlur(x, R, R, 4), ma = bb(la), mb = bb(lb);
+    const saa = bb(la.map(v => v * v)), sbb = bb(lb.map(v => v * v)), sab = bb(la.map((v, i) => v * lb[i]));
+    const C1 = 1e-4, C2 = 9e-4, acc = { all: [0, 0, 0], face: [0, 0, 0] };
+    for (let i = 0; i < n; i++) {
+      if (!inside(i)) continue;
+      const va = saa[i] - ma[i] ** 2, vb = sbb[i] - mb[i] ** 2, cab = sab[i] - ma[i] * mb[i];
+      const ss = (2 * ma[i] * mb[i] + C1) * (2 * cab + C2) / ((ma[i] ** 2 + mb[i] ** 2 + C1) * (va + vb + C2));
+      const e = Math.sqrt(((A[i * 3] - ref[i * 3]) ** 2 + (A[i * 3 + 1] - ref[i * 3 + 1]) ** 2 + (A[i * 3 + 2] - ref[i * 3 + 2]) ** 2) / 3);
+      for (const [key, w] of [['all', 1], ['face', faceM[i] > 0.5 ? 1 : 0]]) { acc[key][0] += ss * w; acc[key][1] += e * w; acc[key][2] += w; }
+    }
+    return { ssim: r3(acc.all[0] / acc.all[2]), err: r3(acc.all[1] / acc.all[2]), faceSsim: r3(acc.face[0] / (acc.face[2] || 1)), faceErr: r3(acc.face[1] / (acc.face[2] || 1)) };
+  };
+  return { view: cmp(V), model: cmp(M) };
 }
 if (hp.has('img')) { const im = new Image(); im.onload = () => begin(im, 'Фото'); im.src = hp.get('img'); }
 else loadDemo((im, ex) => { srcKey = ex.key; begin(im, ex.name); });
