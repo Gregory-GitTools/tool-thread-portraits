@@ -74,7 +74,7 @@
 
   <h2>Кадрирование фото</h2>
   <button id="btnCrop">✂ Кадрировать…</button>
-  <button id="btnAuto" title="Программа сама найдёт лицо, приблизит кадр и подберёт нити, контраст и порядок заполнения под это фото">✨ Авто-настройка</button>
+  <button id="btnAuto" title="Подбирает нити (цвет, фон), толщину и порядок заполнения под это фото. Кадр не меняет — его выбирают «✂ Кадрировать…»">✨ Авто-настройка</button>
   <input type="range" id="zoom" min="100" max="800" value="100" hidden>
   <input type="range" id="ox" min="-100" max="100" value="0" hidden>
   <input type="range" id="oy" min="-100" max="100" value="0" hidden>
@@ -343,7 +343,7 @@ $('btnPresetDel').onclick = () => {
 
 // ---------- авто-настройка: лицо, кадр, нити и контраст по самому фото ----------
 function autoSettings() {
-  if (!src) return;
+  if (!src) return; readS();
   const M = 256, k = M / Math.max(src.width, src.height), w = Math.round(src.width * k), h = Math.round(src.height * k);
   const c = document.createElement('canvas'); c.width = w; c.height = h;
   const g = c.getContext('2d'); g.drawImage(src, 0, 0, w, h);
@@ -355,22 +355,8 @@ function autoSettings() {
     if (r > 0.3 && r - gg > 0.04 && gg - b > -0.02 && r - b > 0.1 && r - gg > (gg - b) * 0.8) pts.push([x, y]);
   }
   const face = pts.length > w * h * 0.01;
-  let zoom = 100, ox = 0, oy = 0;
-  if (face) {
-    const q = (a, f) => a[Math.floor(a.length * f)], ys = pts.map(p => p[1]).sort((a, b) => a - b);
-    // кожа сверху вниз: лоб, лицо, а дальше могут быть шея и грудь — они тянули кадр вниз.
-    // Поэтому ширину лица меряем по верхней части кожи, а высоту лица считаем от ширины
-    const yT = q(ys, 0.03), yB = q(ys, 0.97);
-    const xs = pts.filter(p => p[1] < yT + (yB - yT) * 0.35).map(p => p[0]).sort((a, b) => a - b);
-    const x0 = q(xs, 0.05), x1 = q(xs, 0.95), fh = Math.min(yB - yT, (x1 - x0) * 1.5);
-    // голова с частью волос получается лучше, чем лицо вплотную — берём с запасом и чуть выше
-    const side = fh * 2.6, cx = (x0 + x1) / 2, cy = yT + fh * 0.35;
-    zoom = Math.round(Math.min(400, Math.max(100, Math.min(w, h) / side * 100)));
-    ox = Math.round((cx / (w / 2) - 1) * 100); oy = Math.round((cy / (h / 2) - 1) * 100);
-  }
-  setVal('zoom', zoom); setVal('ox', ox); setVal('oy', oy);
-  // что попало в круг: яркость края (фон), разброс яркости, цветность
-  const { side, cx, cy } = cropOf(zoom, ox, oy), sx = cx * k, sy = cy * k, sr = side * k / 2;
+  // кадр не трогаем — его выбирают «✂ Кадрировать…». Что попало в круг: разброс яркости, цветность
+  const { side, cx, cy } = cropOf(S.zoom, S.ox, S.oy), sx = cx * k, sy = cy * k, sr = side * k / 2;
   const lums = []; let satS = 0;
   for (let y = Math.max(0, Math.floor(sy - sr)); y < Math.min(h, sy + sr); y++) for (let x = Math.max(0, Math.floor(sx - sr)); x < Math.min(w, sx + sr); x++) {
     const rr = Math.hypot(x - sx, y - sy) / sr; if (rr > 1) continue;
@@ -391,7 +377,7 @@ function autoSettings() {
   setVal('nails', 400); setVal('lines', 30000); setVal('alpha', 15);
   setVal('tint', colorful ? 60 : 0); setVal('res', 520); setVal('chaos', 40); setVal('center', face ? 75 : 30);
   readS(); layout();
-  invalidate(`Авто: ${face ? 'лицо найдено, кадр приближен' : 'лица не нашёл — взят весь кадр'}; нити — ${$('threads').selectedOptions[0].text.toLowerCase()}. Нажмите «▶ Старт»`);
+  invalidate(`Авто: ${face ? 'лицо найдено' : 'лица не нашёл'}; нити — ${$('threads').selectedOptions[0].text.toLowerCase()}. Нажмите «▶ Старт»`);
 }
 $('btnAuto').onclick = autoSettings;
 
