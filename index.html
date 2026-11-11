@@ -479,7 +479,7 @@ function pure(c, bg) {
 
 // расчёт ведётся в пространстве «яркость + оттенок», оттенок весит больше: иначе белая нить на синей повязке
 // считается почти такой же удачной, как синяя (в RGB у них совпадает синий канал)
-const CK = 2.2;
+const CK = 1.2;   // вес цвета против яркости: больше — точнее оттенки, но через лицо идут цветные полосы
 function qOf(a, i3, out, o3) {
   const y = 0.299 * a[i3] + 0.587 * a[i3 + 1] + 0.114 * a[i3 + 2];
   out[o3] = y; out[o3 + 1] = (a[i3 + 2] - y) * CK; out[o3 + 2] = (a[i3] - y) * CK;
@@ -523,6 +523,8 @@ function prepare() {
   if (S.threads === 'mono-dark') { bg = WH; palette = [BK, WH]; }
   else if (S.threads === 'mono-light') { bg = BK; palette = [WH, BK]; }
   else { bg = S.threads === 'color-light' ? WH : BK; palette = [BK, WH, ...mainColors(4)]; }   // чёрная и белая есть всегда — ими проще всего лепить светотень
+  // лёгкая резкость: границы век, губ, ноздрей контрастнее — нити их не размывают
+  { const Bl = blurRGB(T, Math.max(2, Math.round(R * 0.015))); for (let i = 0; i < T.length; i++) T[i] = Math.min(1, Math.max(0, 2 * T[i] - Bl[i])); }
   for (let i = 0; i < n; i++) if (!inside(i)) T.set(bg, i * 3);
 
   // гвозди: по окружности или по периметру квадрата, нумерация с верхней точки по часовой стрелке
