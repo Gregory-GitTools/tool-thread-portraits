@@ -20,6 +20,8 @@
   h1{font-size:14px;margin:0 0 6px;font-weight:600}
   h2{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#889;margin:10px 0 2px;font-weight:600}
   label{display:flex;justify-content:space-between;align-items:center;margin:5px 0;gap:8px}
+  label.off{opacity:.4}
+  label.off input{pointer-events:none}
   input[type=range]{width:105px}
   .num{width:44px;-moz-appearance:textfield;appearance:textfield;background:#1b1b26;color:#eee;border:1px solid #444;border-radius:5px;padding:2px 4px;font:inherit;text-align:right}
   .num::-webkit-inner-spin-button,.num::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
@@ -164,6 +166,10 @@ const S = {};
 const IDS = ['zoom', 'ox', 'oy', 'contrast', 'detail', 'threads', 'shape', 'nails', 'lines', 'alpha', 'res', 'chaos', 'center', 'tint', 'texture', 'frame', 'dur', 'ease'];
 function readS() {
   for (const id of IDS) { const el = $(id); S[id] = el.type === 'range' || id === 'res' ? +el.value : el.value; }
+  // нить одного цвета (белая или чёрная) подкрашивать нечем — ползунок акцента тогда не действует
+  const mono = S.threads.startsWith('mono'), tl = $('tint').closest('label');
+  tl.dataset.title ??= tl.title;
+  tl.classList.toggle('off', mono); tl.title = mono ? 'Работает только с цветными нитями (выберите «Нити: цветным…»)' : tl.dataset.title;
 }
 
 // ---------- параметры из адреса (для тестов): #test=1&hide=1&img=x.jpg&nails=200&u=0.3 ----------
