@@ -25,6 +25,7 @@
   .num::-webkit-inner-spin-button,.num::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
   .rng{display:flex;align-items:center;gap:6px}
   #panel select{max-width:175px}
+  input[type=color]{width:28px;height:24px;padding:0;border:1px solid #444;border-radius:4px;background:none;cursor:pointer}
   select,button{background:#262634;color:#eee;border:1px solid #444;border-radius:6px;padding:4px 7px;font:inherit}
   button{cursor:pointer;margin:3px 2px 0 0}
   button:hover{border-color:#888}
@@ -80,18 +81,28 @@
   <input type="range" id="oy" min="-100" max="100" value="0" hidden>
   <input type="range" id="contrast" min="0" max="100" value="0" hidden>
   <input type="range" id="detail" min="0" max="100" value="70" hidden>
-  <label title="Нейросеть отделяет человека от фона. «Убрать» — фон становится цветом пустых пялец, и все нити идут на лицо и фигуру">Фон <select id="bgcut">
+  <label title="Нейросеть отделяет человека от фона. «Убрать» — фон становится цветом пустых пялец, и все нити идут на лицо и фигуру">Фон фото <select id="bgcut">
     <option value="keep">Оставить как на фото</option>
     <option value="cut">Убрать</option>
   </select></label>
   <canvas id="preview" width="110" height="110" title="Так программа «видит» фото. Щёлкните, чтобы кадрировать" style="cursor:pointer"></canvas>
 
   <h2>Нити и гвозди</h2>
-  <label>Нити <select id="threads">
-    <option value="mono-light">Белым по чёрному</option>
-    <option value="mono-dark">Чёрным по белому</option>
-    <option value="color-light">Цветным по белому</option>
-    <option value="color-dark">Цветным по чёрному</option>
+  <label title="Цвет пустых пялец — по нему натягиваются нити">Цвет фона <span class="row"><input type="color" id="bgC" value="#3a2a1e" hidden><select id="bgcol">
+    <option value="black">Чёрный</option>
+    <option value="white">Белый</option>
+    <option value="custom">Выбрать цвет…</option>
+  </select></span></label>
+  <label title="Чёрные, белые или свой цвет — одна нить, светотень ею и цветом фона. Реалистичные — нити основных цветов фото. Усиленные — те же, но ярче и насыщеннее">Нити <span class="row"><input type="color" id="thC" value="#c0392b" hidden><select id="threads">
+    <option value="black">Чёрные</option>
+    <option value="white">Белые</option>
+    <option value="real">Реалистичные (цвета фото)</option>
+    <option value="vivid">Усиленные (ярче фото)</option>
+    <option value="custom">Выбрать цвет…</option>
+  </select></span></label>
+  <label title="Минимализм: чёткие черты лица, контуры волос и одежды — слегка, фон не рисуется. Нитей нужно меньше">Стиль <select id="style">
+    <option value="full">Полный портрет</option>
+    <option value="min">Минимализм</option>
   </select></label>
   <label>Рамка <select id="shape">
     <option value="circle">Круг (пяльцы)</option>
@@ -132,6 +143,7 @@
   </div>
   <div>
     <button id="btnPng">PNG</button>
+    <button id="btnPngT" title="Только нити, без фона — прозрачный PNG, чтобы положить портрет на любую картинку или видео">PNG без фона</button>
     <button id="btnScheme">Схема (порядок гвоздей)</button>
   </div>
   <div id="status"></div>
@@ -166,7 +178,7 @@ const decor = document.createElement('canvas'), dctx = decor.getContext('2d');  
 const status = t => { $('status').textContent = t; };
 
 const S = {};
-const IDS = ['zoom', 'ox', 'oy', 'contrast', 'detail', 'threads', 'shape', 'nails', 'lines', 'alpha', 'res', 'chaos', 'center', 'tint', 'texture', 'frame', 'dur', 'ease', 'bgcut'];
+const IDS = ['zoom', 'ox', 'oy', 'contrast', 'detail', 'threads', 'bgcol', 'thC', 'bgC', 'style', 'shape', 'nails', 'lines', 'alpha', 'res', 'chaos', 'center', 'tint', 'texture', 'frame', 'dur', 'ease', 'bgcut'];
 function readS() {
   for (const id of IDS) { const el = $(id); S[id] = el.type === 'range' || id === 'res' ? +el.value : el.value; }
 }
@@ -174,6 +186,12 @@ function readS() {
 // ---------- параметры из адреса (для тестов): #test=1&hide=1&img=x.jpg&nails=200&u=0.3 ----------
 const hp = new URLSearchParams(location.hash.slice(1));
 for (const id of IDS) if (hp.has(id)) $(id).value = hp.get(id);
+// раньше нити и фон выбирались одним списком — старые названия (сохранённые настройки, адреса тестов) переводим в два
+const OLD_THREADS = { 'mono-light': ['white', 'black'], 'mono-dark': ['black', 'white'], 'color-light': ['real', 'white'], 'color-dark': ['real', 'black'] };
+if (OLD_THREADS[hp.get('threads')]) [$('threads').value, $('bgcol').value] = OLD_THREADS[hp.get('threads')];
+// поле выбора цвета видно, только когда в списке выбрано «Выбрать цвет…»
+function syncColorUI() { $('bgC').hidden = $('bgcol').value !== 'custom'; $('thC').hidden = $('threads').value !== 'custom'; }
+syncColorUI();
 const TEST = hp.has('test');
 // варианты расчёта для сравнения (tools/bench.mjs). По умолчанию — лучший по замерам: нить из любой пары гвоздей
 // (algo=free) и лицо по нейросети (ai). algo=chain — старый расчёт «одна нить от гвоздя к гвоздю»; ai=0 — лицо
@@ -187,11 +205,11 @@ let src = null;
 // примеры: Вермеер (vermeer.js, общественное достояние) и, если есть, своё тренировочное фото (demo.js — только локально)
 const EXAMPLES = [];
 if (typeof DEMO_JPG !== 'undefined') EXAMPLES.push({ key: 'demo', name: 'Тренировочное фото', img: DEMO_JPG });
-if (typeof VERMEER_JPG !== 'undefined') EXAMPLES.push({ key: 'vermeer', name: 'Вермеер — Девушка с жемчужной серёжкой', img: VERMEER_JPG, threads: 'color-dark' });
+if (typeof VERMEER_JPG !== 'undefined') EXAMPLES.push({ key: 'vermeer', name: 'Вермеер — Девушка с жемчужной серёжкой', img: VERMEER_JPG, threads: 'real', bgcol: 'black' });
 function loadDemo(cb) {
   const ex = EXAMPLES[0];
   if (!ex) { status('Нажмите «Фото…» и выберите снимок'); return; }
-  if (ex.threads && !hp.has('threads')) $('threads').value = ex.threads;   // в адресе (тест) — своё
+  if (ex.threads && !hp.has('threads')) { $('threads').value = ex.threads; $('bgcol').value = ex.bgcol; syncColorUI(); }   // в адресе (тест) — своё
   const im = new Image(); im.onload = () => cb(im, ex); im.src = ex.img;
 }
 let srcName = '', srcKey = null;
@@ -345,6 +363,8 @@ $('presetSel').onchange = () => {
   const p = lsGet(LS_PRESETS, {})[$('presetSel').value];
   if (!p) return;
   for (const id of PRESET_IDS) if (id in p) setVal(id, p[id]);
+  if (OLD_THREADS[p.threads]) { setVal('threads', OLD_THREADS[p.threads][0]); setVal('bgcol', OLD_THREADS[p.threads][1]); }
+  syncColorUI();
   readS(); layout(); invalidate(`Настройки «${$('presetSel').value}» применены — нажмите «▶ Старт»`);
 };
 $('btnPresetSave').onclick = () => {
@@ -371,7 +391,7 @@ function autoSettings() {
   const pts = [];
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
     const i = (y * w + x) * 4, r = d[i] / 255, gg = d[i + 1] / 255, b = d[i + 2] / 255;
-    if (r > 0.3 && r - gg > 0.04 && gg - b > -0.02 && r - b > 0.1 && r - gg > (gg - b) * 0.8) pts.push([x, y]);
+    if (d[i + 3] > 128 && r > 0.3 && r - gg > 0.04 && gg - b > -0.02 && r - b > 0.1 && r - gg > (gg - b) * 0.8) pts.push([x, y]);
   }
   const face = aiMasks && aiMasks.src === src ? aiMasks.face : pts.length > w * h * 0.01;
   // кадр не трогаем — его выбирают «✂ Кадрировать…». Что попало в круг: разброс яркости, цветность
@@ -379,6 +399,7 @@ function autoSettings() {
   const lums = []; let satS = 0;
   for (let y = Math.max(0, Math.floor(sy - sr)); y < Math.min(h, sy + sr); y++) for (let x = Math.max(0, Math.floor(sx - sr)); x < Math.min(w, sx + sr); x++) {
     const rr = Math.hypot(x - sx, y - sy) / sr; if (rr > 1) continue;
+    if (d[(y * w + x) * 4 + 3] < 128) continue;   // прозрачное (PNG без фона) — не фото
     const i = (y * w + x) * 4, r = d[i] / 255, gg = d[i + 1] / 255, b = d[i + 2] / 255, l = 0.299 * r + 0.587 * gg + 0.114 * b;
     lums.push(l); satS += Math.max(r, gg, b) - Math.min(r, gg, b);
   }
@@ -388,16 +409,18 @@ function autoSettings() {
   const bl = [];
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
     if (y > h * 0.6 || (y > 2 && x > 2 && x < w - 3)) continue;
-    const i = (y * w + x) * 4; bl.push((0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]) / 255);
+    const i = (y * w + x) * 4; if (d[i + 3] > 128) bl.push((0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]) / 255);
   }
   bl.sort((a, b) => a - b);
-  const darkBg = bl[Math.floor(bl.length / 2)] < 0.4, colorful = satS / Math.max(1, lums.length) > 0.06;
-  setVal('threads', colorful ? (darkBg ? 'color-dark' : 'color-light') : (darkBg ? 'mono-light' : 'mono-dark'));
+  // у PNG без фона края прозрачные — фон берём противоположным самому человеку: светлое лицо — на чёрном
+  const darkBg = bl.length ? bl[Math.floor(bl.length / 2)] < 0.4 : lums[Math.floor(lums.length / 2)] > 0.5;
+  const colorful = satS / Math.max(1, lums.length) > 0.06;
+  setVal('bgcol', darkBg ? 'black' : 'white'); setVal('threads', colorful ? 'real' : darkBg ? 'white' : 'black'); syncColorUI();
   setVal('nails', 400); setVal('lines', 30000); setVal('alpha', 15);
   // акцент — и у белых/чёрных нитей: середина нити светлее или темнее, так прорисовываются мелкие изгибы (ухо, морщины)
   setVal('tint', 60); setVal('res', 520); setVal('chaos', 40); setVal('center', face ? 75 : 30);
   readS(); layout();
-  invalidate(`Авто: ${face ? 'лицо найдено' : 'лица не нашёл'}; нити — ${$('threads').selectedOptions[0].text.toLowerCase()}. Нажмите «▶ Старт»`);
+  invalidate(`Авто: ${face ? 'лицо найдено' : 'лица не нашёл'}; нити — ${$('threads').selectedOptions[0].text.toLowerCase()}, фон — ${$('bgcol').selectedOptions[0].text.toLowerCase()}. Нажмите «▶ Старт»`);
 }
 $('btnAuto').onclick = autoSettings;
 
@@ -561,7 +584,8 @@ function mainColors(k) {
     cnt = sum.map(x => x[3]);
   }
   // нить чуть насыщеннее среднего цвета пятна — в смеси с фоном она бледнеет
-  const satur = c => { const m = (c[0] + c[1] + c[2]) / 3; return c.map(v => Math.min(1, Math.max(0, m + (v - m) * 1.2))); };
+  const sk = S.threads === 'vivid' ? 1.6 : 1.2;
+  const satur = c => { const m = (c[0] + c[1] + c[2]) / 3; return c.map(v => Math.min(1, Math.max(0, m + (v - m) * sk))); };
   // чёрная и белая нити уже есть; из остальных берём заметные пятна, не похожие друг на друга
   const cand = cen.map((c, j) => ({ c: satur(c), w: cnt[j] / pts.length * (0.3 + sat(c) * 3) }))
     .filter(o => o.w > 0.004 && d2(o.c, [0, 0, 0]) > 0.05 && d2(o.c, [1, 1, 1]) > 0.05)
@@ -572,7 +596,7 @@ function mainColors(k) {
   // светлая охра считались разными нитями и занимали все места — синяя повязка Вермеера выходила серой
   // (на чёрном фоне pure() и так выравнивает яркость; там сравнение по оттенку уводило среднюю коричневую нить
   // в пользу второй голубой, и лицо выходило хуже — поэтому только на белом)
-  const hue = c => { if (bg[0] === 0) return c; const m = Math.max(...c, 0.05); return c.map(v => v / m); }, keys = [];
+  const hue = c => { if (lumOf(bg) < 0.5) return c; const m = Math.max(...c, 0.05); return c.map(v => v / m); }, keys = [];
   for (const o of cand) {
     const c = pure(o.c, bg), h = hue(c);
     if (out.length < k && keys.every(q => d2(q, h) > 0.06)) { out.push(c); keys.push(h); }
@@ -585,13 +609,19 @@ const inside = i => {
   return x * x + y * y <= (R / 2 - 1) ** 2;
 };
 
+const lumOf = c => 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
+const hexRGB = h => [1, 3, 5].map(k => parseInt(h.slice(k, k + 2), 16) / 255);
+const bgColor = () => S.bgcol === 'white' ? [1, 1, 1] : S.bgcol === 'custom' ? hexRGB(S.bgC) : [0, 0, 0];
+// одна нить (чёрная, белая или своего цвета) — её цвет; цветные нити из фото — null
+const monoColor = () => S.threads === 'black' ? [0, 0, 0] : S.threads === 'white' ? [1, 1, 1] : S.threads === 'custom' ? hexRGB(S.thC) : null;
+
 // нитка чище и ярче среднего цвета фото: тёмные места на чёрном фоне получаются тем, что нитей там меньше
 // (на белом — наоборот, цвет сдвигается к насыщенному тёмному)
 function pure(c, bg) {
   // только частично: полностью «чистый» тон кожи на белом — ярко-рыжая нить, лицо выходит красным
-  const k = 0.4;
+  const k = S.threads === 'vivid' ? 0.75 : 0.4;
   let p;
-  if (bg[0] === 0) { const m = Math.max(...c, 0.05); p = c.map(v => v / m); }
+  if (lumOf(bg) < 0.5) { const m = Math.max(...c, 0.05); p = c.map(v => v / m); }
   else { const m = Math.min(...c, 0.95); p = c.map(v => (v - m) / (1 - m)); }
   return c.map((v, ch) => v + (p[ch] - v) * k);
 }
@@ -619,11 +649,16 @@ function prepare() {
   const sx = cx - side / 2, sy = cy - side / 2;
   o.drawImage(src, sx, sy, side, side, 0, 0, R, R);
   const d = o.getImageData(0, 0, R, R).data;
-  const mono = S.threads.startsWith('mono');
+  const mono = monoColor();
+  bg = bgColor();
+  // PNG без фона: прозрачные места — не фото, а пустые пяльцы (раньше читались как чёрные)
+  const tr = new Float32Array(n); let trN = 0;
+  for (let i = 0; i < n; i++) if (d[i * 4 + 3] < 255) { tr[i] = 1 - d[i * 4 + 3] / 255; trN++; }
 
   // автоуровни по яркости внутри рамки + контраст
   const lum = new Float32Array(n), vals = [];
-  for (let i = 0; i < n; i++) { lum[i] = (0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2]) / 255; if (inside(i)) vals.push(lum[i]); }
+  for (let i = 0; i < n; i++) { lum[i] = (0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2]) / 255; if (inside(i) && tr[i] < 0.5) vals.push(lum[i]); }
+  if (!vals.length) vals.push(0, 1);
   vals.sort((a, b) => a - b);
   const lo = vals[Math.floor(vals.length * 0.02)], hi = vals[Math.floor(vals.length * 0.98)], kk = 1 / Math.max(0.05, hi - lo);
   const con = 1 + S.contrast / 100 * 1.5;
@@ -632,26 +667,31 @@ function prepare() {
   // контраст — только по яркости (поканальный контраст уводил кожу в рыжий); отличие цвета от серого
   // растёт с яркостью лишь слегка: при сильном контрасте высветленная кожа иначе становится
   // золотисто-рыжей, и в конце расчёта золотые нити ложатся поверх всего лица
+  // одна нить: цель — смесь цвета фона и нити (светлая нить на тёмном фоне — светлые места, тёмная — тёмные).
+  // Усиленные — отличие цвета от серого почти вдвое больше, чем на фото
+  const light = mono && lumOf(mono) >= lumOf(bg), vk = S.threads === 'vivid' ? 1.8 : 1;
   for (let i = 0; i < n; i++) {
-    const L = lev(lum[i]), k = Math.min(1.2, Math.sqrt(L / Math.max(0.02, lum[i])));
-    for (let ch = 0; ch < 3; ch++) T[i * 3 + ch] = mono ? L : Math.min(1, Math.max(0, L + (d[i * 4 + ch] / 255 - lum[i]) * k));
+    const L = lev(lum[i]), k = Math.min(1.2, Math.sqrt(L / Math.max(0.02, lum[i]))) * vk, t = light ? L : 1 - L;
+    for (let ch = 0; ch < 3; ch++) T[i * 3 + ch] = mono ? bg[ch] + (mono[ch] - bg[ch]) * t : Math.min(1, Math.max(0, L + (d[i * 4 + ch] / 255 - lum[i]) * k));
   }
+  if (trN) for (let i = 0; i < n; i++) if (tr[i]) for (let ch = 0; ch < 3; ch++) T[i * 3 + ch] += (bg[ch] - T[i * 3 + ch]) * tr[i];
   // нейросеть: маски кожи лица, волос, фона и черт лица под этот кадр
   const AI = OPT.ai ? aiCrop(sx, sy, side) : null;
   eyeM = AI ? AI[3] : null;   // глаза и радужки (1), губы (0.9)… — для замера
   if (AI && S.bgcut === 'cut') {
     // фон убрать: где фон — цвет пустых пялец, на границе плавный переход
-    const bgc = S.threads === 'mono-dark' || S.threads === 'color-light' ? 1 : 0;
     let m = AI[2]; for (let k = 0; k < 2; k++) m = boxBlur(m, R, R, Math.max(1, Math.round(R * 0.004)));
-    for (let i = 0; i < n; i++) for (let ch = 0; ch < 3; ch++) T[i * 3 + ch] += (bgc - T[i * 3 + ch]) * m[i];
+    for (let i = 0; i < n; i++) for (let ch = 0; ch < 3; ch++) T[i * 3 + ch] += (bg[ch] - T[i * 3 + ch]) * m[i];
   }
   T0 = T.slice();   // фото как есть (без резкости) — с ним сравнивает замер качества (#test)
 
   const WH = [1, 1, 1], BK = [0, 0, 0];
   // вторая нить цвета фона «стирает» лишнее: без неё ошибку нельзя исправить, и расчёт рано останавливается
-  if (S.threads === 'mono-dark') { bg = WH; palette = [BK, WH]; }
-  else if (S.threads === 'mono-light') { bg = BK; palette = [WH, BK]; }
-  else { bg = S.threads === 'color-light' ? WH : BK; palette = [BK, WH, ...mainColors(4)]; }   // чёрная и белая есть всегда — ими проще всего лепить светотень
+  if (mono) palette = [mono, bg];
+  else {
+    palette = [BK, WH, ...mainColors(4)];   // чёрная и белая есть всегда — ими проще всего лепить светотень
+    if (!palette.some(c => c.every((v, ch) => v === bg[ch]))) palette.push(bg);   // фон своего цвета — и нить-«ластик» его цвета
+  }
   // лёгкая резкость: границы век, губ, ноздрей контрастнее — нити их не размывают
   const SH = +(hp.get('sharp') || 1);
   { const Bl = blurRGB(T, Math.max(2, Math.round(R * 0.015))); for (let i = 0; i < T.length; i++) T[i] = Math.min(1, Math.max(0, T[i] + SH * (T[i] - Bl[i]))); }
@@ -674,8 +714,10 @@ function prepare() {
   }
   pixCache = new Map();
 
-  // порядок заполнения: сначала линии по сильно размытому фото (хаос, массы), потом по менее размытому (формы), потом точно (детали)
-  const ch = S.chaos / 100, rA = Math.max(1, Math.round(R * 0.045 * ch)), rB = Math.max(1, Math.round(rA / 3));
+  // порядок заполнения: сначала линии по сильно размытому фото (хаос, массы), потом по менее размытому (формы), потом точно (детали).
+  // В минимализме хаоса нет — паутина по пятнам там лишняя
+  const MIN = S.style === 'min';
+  const ch = MIN ? 0 : S.chaos / 100, rA = Math.max(1, Math.round(R * 0.045 * ch)), rB = Math.max(1, Math.round(rA / 3));
   // until — доля линий слоя, после которой фаза кончается
   phases = [];
   if (ch > 0) {
@@ -733,6 +775,22 @@ function prepare() {
     let fm = AI[3]; for (let k = 0; k < 2; k++) fm = boxBlur(fm, R, R, Math.max(1, Math.round(R * 0.006)));
     for (let i = 0; i < n; i++) ft[i] = Math.max(ft[i] * 0.5, fm[i]);
   }
+  // минимализм: черты лица — в полную силу, кожа — слабее, контуры волос и одежды — слегка, фон — пустой.
+  // Цель там сводится к цвету фона, и нити туда не идут
+  if (MIN) {
+    let pm;   // где человек (0..1): по нейросети, иначе — лицо с запасом
+    if (AI) pm = AI[2].map(v => 1 - v);
+    else { pm = face.slice(); for (let k = 0; k < 2; k++) pm = boxBlur(pm, R, R, rb); pm = pm.map(v => Math.min(1, v * 2)); }
+    // черты (глаза, брови, губы, ноздри) ещё и контрастнее, чем на фото — на них MB больше нити
+    const MS = +(hp.get('ms') || 0.8), MC = +(hp.get('mc') || 0.35), MB = +(hp.get('mb') ?? 0.6), m = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const f2 = Math.min(1, ft[i] * 2);
+      m[i] = Math.max(face[i] * (MS + (1 - MS) * f2) * (1 + MB * f2), MC * Math.min(1, e[i] / e95)) * pm[i] * (1 - tr[i]);
+    }
+    const lo3 = [0, 1, 2].map(ch => mono ? Math.min(bg[ch], mono[ch]) : 0), hi3 = [0, 1, 2].map(ch => mono ? Math.max(bg[ch], mono[ch]) : 1);
+    for (const a of new Set([T, ...phases.map(ph => ph.T)]))
+      for (let i = 0; i < n; i++) for (let ch = 0; ch < 3; ch++) a[i * 3 + ch] = Math.min(hi3[ch], Math.max(lo3[ch], bg[ch] + (a[i * 3 + ch] - bg[ch]) * m[i]));
+  }
   // контуры вне лица (причёска, одежда, фон) почти не важны — иначе нити уходят на волосы, а лицо портится
   for (let i = 0; i < n; i++) Wt[i] = 1 + (Wt[i] - 1) * (0.25 + 0.75 * face[i]);
   // очередь: сначала глаза и губы (мелкие черты внутри лица), потом остальное лицо, затем повязка/одежда, края
@@ -771,9 +829,10 @@ function prepare() {
   // «ластик» — нить цвета фона. На белом фоне это белая нить поверх чёрных: нити мутнеют, «растворяются» —
   // там его нет, и расчёт останавливается, когда новые нити почти ничего не дают (иначе добивает мелкими
   // поправками до предела). На чёрном фоне чёрный ластик, наоборот, держит фон тёмным — без него фон зарастает
-  const white = bg[0] === 1;
-  const EG = +(hp.get('eg') ?? (white ? 0 : 1));
-  stopK = +(hp.get('stop') ?? (white ? 0.03 : 0));
+  const white = lumOf(bg) > 0.5;
+  // В минимализме ластик нужен и на белом: фон должен остаться пустым, а хорды от лица до гвоздей его пересекают
+  const EG = +(hp.get('eg') ?? (white && !MIN ? 0 : 1));
+  stopK = +(hp.get('stop') ?? (white && !MIN ? 0.03 : 0));
   for (let i = 0; i < n; i++) WtE[i] = Wt[i] * (1 - 0.4 * bgM[i]) * EG;   // 0.9 оставлял фон серым, и тёмные фото (лицо на чёрном) теряли контраст
   // хаос — только вокруг лица: на лице с первых нитей цель чёткая, иначе размытые пятна заливают глаза светом,
   // и потом их уже не вернуть
@@ -1128,6 +1187,7 @@ function drawLines(i0, i1) {
     const [a, b, c, t] = lineAt(i), [x0, y0] = nailPx(a), [x1, y1] = nailPx(b);
     bctx.strokeStyle = threadStyle(bctx, a, b, c, t);
     bctx.globalAlpha = op; bctx.lineWidth = tw;
+    bctx.globalCompositeOperation = pngClear && c === eraser ? 'destination-out' : 'source-over';
     bctx.beginPath(); bctx.moveTo(x0, y0);
     if (S.texture === 'wool') {
       // шерсть: нить чуть неровная, как скрученная пряжа — без размытого ворса, края остаются чёткими
@@ -1138,13 +1198,13 @@ function drawLines(i0, i1) {
     if (S.texture === 'silk') {
       // шёлк: блик посередине нити, ярче, когда нить лежит поперёк света (свет сверху слева)
       const sh = Math.max(0, Math.cos(2 * (Math.atan2(y1 - y0, x1 - x0) + Math.PI / 4)));
-      if (sh > 0.05) {
+      if (sh > 0.05 && !(pngClear && c === eraser)) {
         bctx.globalAlpha = op * 0.45 * sh; bctx.strokeStyle = '#fff'; bctx.lineWidth = tw * 0.5;
         bctx.beginPath(); bctx.moveTo(x0, y0); bctx.lineTo(x1, y1); bctx.stroke();
       }
     }
   }
-  bctx.globalAlpha = 1;
+  bctx.globalAlpha = 1; bctx.globalCompositeOperation = 'source-over';
 }
 // active — натягиваемая сейчас нить: [номер в seq, доля пройденного пути, заметность]
 function render(active) {
@@ -1288,21 +1348,28 @@ $('btnRec').onclick = () => {
 };
 // PNG — только сам портрет: квадрат точно по рамке, поле вокруг круга — цвета фона картины (не тёмное поле окна),
 // и в своём разрешении, независимо от размера окна и панели. Рисуется заново в том же холсте, потом всё как было
+// «PNG без фона» — только нити на прозрачном: нить цвета фона («ластик») там не рисуется, а стирает то, что под ней
 const PNG_SIZE = 2048;
-$('btnPng').onclick = () => {
+let pngClear = false;
+function savePng(clear) {
   if (!R) return;
   base.width = base.height = W = H = D = PNG_SIZE; X0 = Y0 = 0;
-  bctx.globalAlpha = 1; bctx.fillStyle = rgb(bg); bctx.fillRect(0, 0, W, H);
-  drawLines(0, shown);
-  const nr = Math.max(1.2, D * 0.0028);
-  bctx.fillStyle = 'rgba(160,160,160,.55)';
-  for (let i = 0; i < nailXY.length; i++) { const [x, y] = nailPx(i); bctx.beginPath(); bctx.arc(x, y, nr, 0, Math.PI * 2); bctx.fill(); }
-  base.toBlob(b => download(b, `thread-portrait-${stamp()}.png`));   // снимок холста берётся сразу, до layout()
+  bctx.globalAlpha = 1;
+  if (clear) bctx.clearRect(0, 0, W, H); else { bctx.fillStyle = rgb(bg); bctx.fillRect(0, 0, W, H); }
+  pngClear = clear; drawLines(0, shown); pngClear = false;
+  if (!clear) {
+    const nr = Math.max(1.2, D * 0.0028);
+    bctx.fillStyle = 'rgba(160,160,160,.55)';
+    for (let i = 0; i < nailXY.length; i++) { const [x, y] = nailPx(i); bctx.beginPath(); bctx.arc(x, y, nr, 0, Math.PI * 2); bctx.fill(); }
+  }
+  base.toBlob(b => download(b, `thread-portrait-${stamp()}${clear ? '-transparent' : ''}.png`));   // снимок холста берётся сразу, до layout()
   layout();
-};
+}
+$('btnPng').onclick = () => savePng(false);
+$('btnPngT').onclick = () => savePng(true);
 $('btnScheme').onclick = scheme;
-for (const id of ['contrast', 'detail', 'threads', 'shape', 'nails', 'lines', 'alpha', 'res', 'chaos', 'tint', 'bgcut'])
-  $(id).addEventListener('change', () => invalidate());
+for (const id of ['contrast', 'detail', 'threads', 'bgcol', 'thC', 'bgC', 'style', 'shape', 'nails', 'lines', 'alpha', 'res', 'chaos', 'tint', 'bgcut'])
+  $(id).addEventListener('change', () => { syncColorUI(); invalidate(); });
 for (const id of ['frame', 'dur', 'ease']) $(id).addEventListener('input', () => { readS(); if (id === 'frame') layout(); });
 // порядок показа меняется сразу, без нового расчёта
 $('center').addEventListener('change', () => {
