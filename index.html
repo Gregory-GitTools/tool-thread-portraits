@@ -394,7 +394,8 @@ function autoSettings() {
   const darkBg = bl[Math.floor(bl.length / 2)] < 0.4, colorful = satS / Math.max(1, lums.length) > 0.06;
   setVal('threads', colorful ? (darkBg ? 'color-dark' : 'color-light') : (darkBg ? 'mono-light' : 'mono-dark'));
   setVal('nails', 400); setVal('lines', 30000); setVal('alpha', 15);
-  setVal('tint', colorful ? 60 : 0); setVal('res', 520); setVal('chaos', 40); setVal('center', face ? 75 : 30);
+  // акцент — и у белых/чёрных нитей: середина нити светлее или темнее, так прорисовываются мелкие изгибы (ухо, морщины)
+  setVal('tint', 60); setVal('res', 520); setVal('chaos', 40); setVal('center', face ? 75 : 30);
   readS(); layout();
   invalidate(`Авто: ${face ? 'лицо найдено' : 'лица не нашёл'}; нити — ${$('threads').selectedOptions[0].text.toLowerCase()}. Нажмите «▶ Старт»`);
 }
